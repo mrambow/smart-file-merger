@@ -10,7 +10,11 @@ public sealed class RelativeFilePathTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void Constructor_WhenPathIsNullOrWhiteSpace_ThrowsArgumentException(string? invalidPath)
+    [InlineData("\"\"")]
+    [InlineData("''")]
+    [InlineData("  \"\"  ")]
+    [InlineData("\"   \"")]
+    public void Constructor_WhenPathIsNullOrWhiteSpaceOrOnlyQuotes_ThrowsArgumentException(string? invalidPath)
     {
         // Act
         var act = () => new RelativeFilePath(invalidPath!);

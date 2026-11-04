@@ -10,7 +10,11 @@ public sealed class DirectoryRootTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void Constructor_WhenPathIsNullOrWhiteSpace_ThrowsArgumentException(string? invalidPath)
+    [InlineData("\"\"")]
+    [InlineData("''")]
+    [InlineData("  \"\"  ")]
+    [InlineData("\"   \"")]
+    public void Constructor_WhenPathIsNullOrWhiteSpaceOrOnlyQuotes_ThrowsArgumentException(string? invalidPath)
     {
         // Act
         var act = () => new DirectoryRoot(invalidPath!);
@@ -34,6 +38,20 @@ public sealed class DirectoryRootTests
         directoryRoot.FullPath.Should().Be(expectedFullPath);
     }
 
+    [Theory]
+    [InlineData(@"C:\", @"C:\")]
+    [InlineData(@"C:/", @"C:\")]
+    [InlineData("\"C:\\\"", @"C:\")]
+    [InlineData("'C:/'", @"C:\")]
+    public void Constructor_WhenPathIsDriveRoot_PreservesTrailingDirectorySeparator(string inputPath, string expectedFullPath)
+    {
+        // Act
+        var directoryRoot = new DirectoryRoot(inputPath);
+
+        // Assert
+        directoryRoot.FullPath.Should().Be(expectedFullPath);
+    }
+
     [Fact]
     public void CombineWith_WhenGivenRelativePath_ReturnsCombinedFullPath()
     {
@@ -49,6 +67,33 @@ public sealed class DirectoryRootTests
     }
 
     [Fact]
+    public void CombineWith_WhenRootIsDriveRoot_CorrectlyCombinesWithoutMissingSeparator()
+    {
+        // Arrange
+        var root = new DirectoryRoot(@"C:\");
+        var relative = new RelativeFilePath("document.txt");
+
+        // Act
+        var result = root.CombineWith(relative);
+
+        // Assert
+        result.Should().Be(@"C:\document.txt");
+    }
+
+    [Fact]
+    public void CombineWith_WhenRelativePathIsNull_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var root = new DirectoryRoot(@"C:\Data\Source");
+
+        // Act
+        var act = () => root.CombineWith(null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
     public void IsSubdirectoryOf_WhenChildIsInsideParent_ReturnsTrue()
     {
         // Arrange
@@ -60,6 +105,17 @@ public sealed class DirectoryRootTests
     }
 
     [Fact]
+    public void IsSubdirectoryOf_WhenParentIsDriveRoot_ReturnsTrueForChildOnSameDrive()
+    {
+        // Arrange
+        var driveRoot = new DirectoryRoot(@"C:\");
+        var child = new DirectoryRoot(@"C:\Data\SubFolder");
+
+        // Act & Assert
+        child.IsSubdirectoryOf(driveRoot).Should().BeTrue();
+    }
+
+    [Fact]
     public void IsSubdirectoryOf_WhenPathsAreEqual_ReturnsTrue()
     {
         // Arrange
@@ -68,6 +124,17 @@ public sealed class DirectoryRootTests
 
         // Act & Assert
         dir1.IsSubdirectoryOf(dir2).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsSubdirectoryOf_WhenBothAreDriveRootsOnSameDrive_ReturnsTrue()
+    {
+        // Arrange
+        var root1 = new DirectoryRoot(@"C:\");
+        var root2 = new DirectoryRoot(@"C:\");
+
+        // Act & Assert
+        root1.IsSubdirectoryOf(root2).Should().BeTrue();
     }
 
     [Fact]
@@ -91,19 +158,6 @@ public sealed class DirectoryRootTests
 
         // Act & Assert
         parent.IsSubdirectoryOf(child).Should().BeFalse();
-    }
-
-    [Fact]
-    public void CombineWith_WhenRelativePathIsNull_ThrowsArgumentNullException()
-    {
-        // Arrange
-        var root = new DirectoryRoot(@"C:\Data\Source");
-
-        // Act
-        var act = () => root.CombineWith(null!);
-
-        // Assert
-        act.Should().Throw<ArgumentNullException>();
     }
 
     [Fact]

@@ -15,7 +15,16 @@ public sealed record DirectoryRoot
         }
 
         var cleaned = path.Trim().Trim('"', '\'');
-        FullPath = Path.GetFullPath(cleaned).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            throw new ArgumentException("Pfad darf nicht leer sein.", nameof(path));
+        }
+
+        var full = Path.GetFullPath(cleaned);
+        var root = Path.GetPathRoot(full);
+        FullPath = IsRootDirectory(full, root)
+            ? EnsureTrailingSeparator(root!)
+            : full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     public string CombineWith(RelativeFilePath relativePath)
@@ -28,8 +37,30 @@ public sealed record DirectoryRoot
     {
         ArgumentNullException.ThrowIfNull(potentialParent);
 
-        var parentPath = potentialParent.FullPath + Path.DirectorySeparatorChar;
-        var thisPath = FullPath + Path.DirectorySeparatorChar;
+        var parentPath = EnsureTrailingSeparator(potentialParent.FullPath);
+        var thisPath = EnsureTrailingSeparator(FullPath);
         return thisPath.StartsWith(parentPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRootDirectory(string fullPath, string? root)
+    {
+        if (root is null)
+        {
+            return false;
+        }
+
+        var trimmedFull = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var trimmedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(trimmedFull, trimmedRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        if (path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            return path;
+        }
+
+        return path + Path.DirectorySeparatorChar;
     }
 }

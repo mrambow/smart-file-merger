@@ -15,6 +15,11 @@ public sealed record RelativeFilePath
         }
 
         var cleaned = relativePath.Trim().Trim('"', '\'');
+        if (string.IsNullOrWhiteSpace(cleaned))
+        {
+            throw new ArgumentException("Relativer Pfad darf nicht leer sein.", nameof(relativePath));
+        }
+
         if (Path.IsPathRooted(cleaned))
         {
             throw new ArgumentException("Pfad muss relativ sein.", nameof(relativePath));
