@@ -144,6 +144,22 @@ public sealed class WindowsFileSystemServiceIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void MoveFile_WhenSourceIsReadOnly_MovesSuccessfullyWithoutThrowing()
+    {
+        var sourcePath = Path.Combine(_testDirectory, "source_readonly.txt");
+        var targetPath = Path.Combine(_testDirectory, "target_readonly.txt");
+        File.WriteAllText(sourcePath, "source readonly content");
+        File.SetAttributes(sourcePath, FileAttributes.ReadOnly);
+
+        var act = () => _sut.MoveFile(sourcePath, targetPath, overwrite: false);
+
+        act.Should().NotThrow();
+        File.Exists(sourcePath).Should().BeFalse();
+        File.Exists(targetPath).Should().BeTrue();
+        File.ReadAllText(targetPath).Should().Be("source readonly content");
+    }
+
+    [Fact]
     public void MoveFile_WhenTargetIsReadOnlyAndOverwriteIsTrue_OverwritesSuccessfully()
     {
         var sourcePath = Path.Combine(_testDirectory, "source.txt");

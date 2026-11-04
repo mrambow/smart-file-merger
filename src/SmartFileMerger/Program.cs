@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SmartFileMerger.Application;
 using SmartFileMerger.Application.Strategies;
 using SmartFileMerger.Domain.Interfaces;
+using SmartFileMerger.Domain.Models;
 using SmartFileMerger.Infrastructure;
 using SmartFileMerger.Presentation;
 
@@ -29,7 +30,7 @@ public static class Program
 
         try
         {
-            return await ExecuteWorkflowAsync(serviceProvider, ui);
+            return await ExecuteWorkflowAsync(serviceProvider, ui, args);
         }
         catch (Exception ex)
         {
@@ -38,8 +39,8 @@ public static class Program
         }
     }
 
-    public static Task<int> RunAsync(IServiceProvider serviceProvider, IUserInterface ui) =>
-        ExecuteWorkflowAsync(serviceProvider, ui);
+    public static Task<int> RunAsync(IServiceProvider serviceProvider, IUserInterface ui, string[]? args = null) =>
+        ExecuteWorkflowAsync(serviceProvider, ui, args);
 
     public static ServiceProvider ConfigureServices()
     {
@@ -66,7 +67,10 @@ public static class Program
         return services;
     }
 
-    public static async Task<int> ExecuteWorkflowAsync(IServiceProvider serviceProvider, IUserInterface ui)
+    public static async Task<int> ExecuteWorkflowAsync(
+        IServiceProvider serviceProvider,
+        IUserInterface ui,
+        string[]? args = null)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(ui);
@@ -77,7 +81,7 @@ public static class Program
         ui.ShowHeader();
         await CheckForUpdatesAsync(updateCheckService, ui);
 
-        var (source, target, isDryRun) = ui.PromptConfiguration();
+        var (source, target, isDryRun) = ResolveConfiguration(args, ui);
         if (!ui.ConfirmMerge(source, target, isDryRun))
         {
             ui.ShowInfo(UserCancelledMessage);
@@ -88,6 +92,67 @@ public static class Program
         ui.DisplayMergeSummary(summary);
 
         return summary.ErrorsOccurred > 0 ? ErrorExitCode : SuccessExitCode;
+    }
+
+    private static (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) ResolveConfiguration(
+        string[]? args,
+        IUserInterface ui)
+    {
+        if (TryParseCommandLineArguments(args, out var cliConfig))
+        {
+            return cliConfig;
+        }
+
+        return ui.PromptConfiguration();
+    }
+
+    private static bool TryParseCommandLineArguments(
+        string[]? args,
+        out (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) config)
+    {
+        config = default;
+
+        if (args is null || args.Length < 2)
+        {
+            return false;
+        }
+
+        var nonFlagArgs = args.Where(arg => !IsFlag(arg)).ToList();
+        if (nonFlagArgs.Count < 2)
+        {
+            return false;
+        }
+
+        var isDryRun = args.Any(IsDryRunFlag);
+
+        return TryCreateDirectoryRoots(nonFlagArgs[0], nonFlagArgs[1], isDryRun, out config);
+    }
+
+    private static bool IsFlag(string arg) =>
+        arg.StartsWith("-", StringComparison.Ordinal);
+
+    private static bool IsDryRunFlag(string arg) =>
+        string.Equals(arg, "--dry-run", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(arg, "-d", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryCreateDirectoryRoots(
+        string sourcePath,
+        string targetPath,
+        bool isDryRun,
+        out (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) config)
+    {
+        try
+        {
+            var source = new DirectoryRoot(sourcePath);
+            var target = new DirectoryRoot(targetPath);
+            config = (source, target, isDryRun);
+            return true;
+        }
+        catch
+        {
+            config = default;
+            return false;
+        }
     }
 
     private static async Task CheckForUpdatesAsync(IUpdateCheckService updateCheckService, IUserInterface ui)

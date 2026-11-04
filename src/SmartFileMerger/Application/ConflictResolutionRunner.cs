@@ -91,7 +91,7 @@ public class ConflictResolutionRunner
             strategy.Execute(conflict, source, target);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             _ui.ShowWarning($"Fehler beim Ausführen der Konfliktlösung für '{conflict.RelativePath.Value}': {ex.Message}");
             return false;

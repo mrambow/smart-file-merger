@@ -439,6 +439,149 @@ public sealed class EndToEndWorkflowTests : IDisposable
         ui.Received(1).ShowError(Arg.Is<string>(msg => msg.Contains("Fatal terminal error")));
     }
 
+    [Fact]
+    public async Task RunAsync_WhenValidCliArgumentsProvided_BypassesPromptConfigurationAndUsesCliValues()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+
+        var expectedSource = new DirectoryRoot(_sourceDir);
+        var expectedTarget = new DirectoryRoot(_targetDir);
+
+        ui.ConfirmMerge(expectedSource, expectedTarget, isDryRun: true).Returns(false);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var args = new[] { _sourceDir, _targetDir, "--dry-run" };
+        var exitCode = await Program.RunAsync(args, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.DidNotReceive().PromptConfiguration();
+        ui.Received(1).ConfirmMerge(expectedSource, expectedTarget, isDryRun: true);
+        ui.Received(1).ShowInfo("Vorgang durch Benutzer abgebrochen.");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenShortDryRunFlagUsed_SetsIsDryRunToTrue()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+
+        var expectedSource = new DirectoryRoot(_sourceDir);
+        var expectedTarget = new DirectoryRoot(_targetDir);
+
+        ui.ConfirmMerge(expectedSource, expectedTarget, isDryRun: true).Returns(false);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var args = new[] { "-d", _sourceDir, _targetDir };
+        var exitCode = await Program.RunAsync(args, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.DidNotReceive().PromptConfiguration();
+        ui.Received(1).ConfirmMerge(expectedSource, expectedTarget, isDryRun: true);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenFewerThanTwoNonFlagArgumentsProvided_FallsBackToPromptConfiguration()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var args = new[] { "--dry-run", _sourceDir };
+        var exitCode = await Program.RunAsync(args, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptConfiguration();
+        ui.Received(1).ConfirmMerge(source, target, false);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenCliArgumentsContainInvalidPath_FallsBackToPromptConfiguration()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var args = new[] { "   ", _targetDir };
+        var exitCode = await Program.RunAsync(args, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptConfiguration();
+        ui.Received(1).ConfirmMerge(source, target, false);
+    }
+
     #endregion
 
     #region Private Helpers

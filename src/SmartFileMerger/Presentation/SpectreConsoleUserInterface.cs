@@ -91,20 +91,26 @@ public sealed class SpectreConsoleUserInterface : IUserInterface
                 new PercentageColumn(),
                 new RemainingTimeColumn(),
                 new SpinnerColumn())
-            .Start(ctx =>
-            {
-                var progressTask = ctx.AddTask("[green]Verarbeite Dateien[/]", maxValue: Math.Max(1, totalFiles));
+            .Start(ctx => ExecuteWithProgress(ctx, totalFiles, work));
+    }
 
-                work((description, increment) =>
-                {
-                    if (!string.IsNullOrWhiteSpace(description))
-                    {
-                        progressTask.Description = $"[green]Verarbeite:[/] {Markup.Escape(description)}";
-                    }
+    private static void ExecuteWithProgress(
+        ProgressContext ctx,
+        int totalFiles,
+        Action<Action<string, int>> work)
+    {
+        var progressTask = ctx.AddTask("[green]Verarbeite Dateien[/]", maxValue: Math.Max(1, totalFiles));
+        work((description, increment) => UpdateProgressTask(progressTask, description, increment));
+    }
 
-                    progressTask.Increment(increment);
-                });
-            });
+    private static void UpdateProgressTask(ProgressTask progressTask, string description, int increment)
+    {
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            progressTask.Description = $"[green]Verarbeite:[/] {Markup.Escape(description)}";
+        }
+
+        progressTask.Increment(increment);
     }
 
     public IConflictResolutionStrategy PromptForConflictResolution(

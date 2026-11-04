@@ -37,7 +37,13 @@ public sealed class WindowsFileSystemService : IFileSystemService
             return Array.Empty<RelativeFilePath>();
         }
 
-        return Directory.EnumerateFiles(root.FullPath, "*", SearchOption.AllDirectories)
+        var enumerationOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true
+        };
+
+        return Directory.EnumerateFiles(root.FullPath, "*", enumerationOptions)
             .Select(filePath => new RelativeFilePath(Path.GetRelativePath(root.FullPath, filePath)))
             .ToList();
     }
@@ -71,6 +77,11 @@ public sealed class WindowsFileSystemService : IFileSystemService
         ArgumentNullException.ThrowIfNull(targetFullPath);
 
         EnsureDirectoryExistsForFile(targetFullPath);
+
+        if (File.Exists(sourceFullPath))
+        {
+            StripRestrictingAttributes(sourceFullPath);
+        }
 
         if (overwrite && File.Exists(targetFullPath))
         {

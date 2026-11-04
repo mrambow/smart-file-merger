@@ -51,6 +51,38 @@ public sealed class RelativeFilePathTests
         relativePath.Value.Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData(@"..\file.txt")]
+    [InlineData(@"../file.txt")]
+    [InlineData(@"a/../b")]
+    [InlineData(@"a\..\b")]
+    [InlineData(@"sub\dir\..")]
+    [InlineData(@"..")]
+    [InlineData(@"dir\..\..\file.txt")]
+    [InlineData(@"a/ .. /b")]
+    public void Constructor_WhenPathContainsPathTraversal_ThrowsArgumentException(string traversalPath)
+    {
+        // Act
+        var act = () => new RelativeFilePath(traversalPath);
+
+        // Assert
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*Path traversal ('..') is not permitted.*");
+    }
+
+    [Theory]
+    [InlineData("file..name.txt")]
+    [InlineData(@"folder..sub\file.txt")]
+    [InlineData("version.1..2.zip")]
+    public void Constructor_WhenPathContainsDoubleDotsInFileNameOrFolder_DoesNotThrow(string validPath)
+    {
+        // Act
+        var act = () => new RelativeFilePath(validPath);
+
+        // Assert
+        act.Should().NotThrow();
+    }
+
     [Fact]
     public void Properties_WhenSingleFileName_ReturnsExpectedComponents()
     {

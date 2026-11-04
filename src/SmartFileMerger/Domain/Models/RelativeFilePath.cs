@@ -5,6 +5,8 @@ namespace SmartFileMerger.Domain.Models;
 /// </summary>
 public sealed record RelativeFilePath
 {
+    private const string TraversalSegment = "..";
+
     public string Value { get; }
 
     public RelativeFilePath(string relativePath)
@@ -25,6 +27,11 @@ public sealed record RelativeFilePath
             throw new ArgumentException("Pfad muss relativ sein.", nameof(relativePath));
         }
 
+        if (ContainsPathTraversal(cleaned))
+        {
+            throw new ArgumentException("Path traversal ('..') is not permitted.", nameof(relativePath));
+        }
+
         Value = cleaned.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
     }
 
@@ -35,4 +42,11 @@ public sealed record RelativeFilePath
     public string FileNameWithoutExtension => Path.GetFileNameWithoutExtension(Value);
 
     public string? DirectoryName => Path.GetDirectoryName(Value);
+
+    private static bool ContainsPathTraversal(string path)
+    {
+        var normalized = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        var segments = normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment => segment.Trim() == TraversalSegment);
+    }
 }

@@ -517,5 +517,32 @@ public sealed class MergeOrchestratorTests
         _ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("conflict.txt") && msg.Contains("Locked during resolution")));
     }
 
+    [Fact]
+    public void ConflictResolutionRunner_ResolveConflicts_WhenStrategyThrowsArgumentException_CatchesErrorAndIncrementsErrors()
+    {
+        // Arrange
+        var conflict = new FileConflict(
+            new RelativeFilePath("conflict.txt"),
+            new FileMetadata(@"C:\Source\conflict.txt", 200, DateTime.UtcNow, DateTime.UtcNow),
+            new FileMetadata(@"C:\Target\conflict.txt", 100, DateTime.UtcNow, DateTime.UtcNow));
+
+        var mockStrategy = Substitute.For<IConflictResolutionStrategy>();
+        mockStrategy.Key.Returns("custom");
+        mockStrategy.When(x => x.Execute(conflict, _source, _target))
+                    .Do(_ => throw new ArgumentException("Invalid file name with path traversal."));
+
+        _ui.PromptForConflictResolution(conflict, 1, 1, Arg.Any<IReadOnlyList<IConflictResolutionStrategy>>())
+           .Returns(mockStrategy);
+
+        // Act
+        var (resolved, skipped, errors) = _conflictRunner.ResolveConflicts([conflict], _source, _target, [mockStrategy], isDryRun: false);
+
+        // Assert
+        resolved.Should().Be(0);
+        skipped.Should().Be(0);
+        errors.Should().Be(1);
+        _ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("conflict.txt") && msg.Contains("Invalid file name with path traversal.")));
+    }
+
     #endregion
 }
