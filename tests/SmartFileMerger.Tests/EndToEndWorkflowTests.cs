@@ -412,7 +412,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
     }
 
     [Fact]
-    public async Task Main_WhenUnhandledExceptionThrown_CatchesErrorDisplaysMessageAndReturnsErrorExitCode()
+    public async Task RunAsync_WhenUnhandledExceptionThrown_CatchesErrorDisplaysMessageAndReturnsErrorExitCode()
     {
         // Arrange
         var services = new ServiceCollection();
@@ -432,7 +432,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         using var provider = services.BuildServiceProvider();
 
         // Act
-        var exitCode = await Program.Main([], provider);
+        var exitCode = await Program.RunAsync(null, provider);
 
         // Assert
         exitCode.Should().Be(1);

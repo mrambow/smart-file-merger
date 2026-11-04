@@ -20,16 +20,16 @@ public static class Program
     private const string DefaultVersionFallback = "1.0.0";
 
     public static async Task<int> Main(string[] args) =>
-        await Main(args, customServices: null);
+        await RunAsync(args, null);
 
-    public static async Task<int> Main(string[] args, IServiceProvider? customServices)
+    public static async Task<int> RunAsync(string[]? args = null, IServiceProvider? customServices = null)
     {
         var serviceProvider = customServices ?? ConfigureServices();
         var ui = serviceProvider.GetRequiredService<IUserInterface>();
 
         try
         {
-            return await RunAsync(serviceProvider, ui);
+            return await ExecuteWorkflowAsync(serviceProvider, ui);
         }
         catch (Exception ex)
         {
@@ -37,6 +37,9 @@ public static class Program
             return ErrorExitCode;
         }
     }
+
+    public static Task<int> RunAsync(IServiceProvider serviceProvider, IUserInterface ui) =>
+        ExecuteWorkflowAsync(serviceProvider, ui);
 
     public static ServiceProvider ConfigureServices()
     {
@@ -63,7 +66,7 @@ public static class Program
         return services;
     }
 
-    public static async Task<int> RunAsync(IServiceProvider serviceProvider, IUserInterface ui)
+    public static async Task<int> ExecuteWorkflowAsync(IServiceProvider serviceProvider, IUserInterface ui)
     {
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(ui);
@@ -95,10 +98,12 @@ public static class Program
             var currentVersion = GetCurrentVersion();
 
             var (hasUpdate, latestVersion, releaseUrl) = await updateCheckService.CheckForUpdateAsync(currentVersion, cts.Token);
-            if (hasUpdate)
+            if (!hasUpdate)
             {
-                ui.ShowUpdateNotice(latestVersion, releaseUrl);
+                return;
             }
+
+            ui.ShowUpdateNotice(latestVersion, releaseUrl);
         }
         catch
         {
