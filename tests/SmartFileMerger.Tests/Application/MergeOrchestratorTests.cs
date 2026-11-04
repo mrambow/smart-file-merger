@@ -337,6 +337,37 @@ public sealed class MergeOrchestratorTests
         summary.FilesMovedDirectly.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenConflictStrategyExecutionThrowsIOException_CatchesErrorAndIncrementsErrors()
+    {
+        // Arrange
+        var relPath = new RelativeFilePath("conflict.txt");
+        _fileSystem.GetAllRelativeFilePaths(_source).Returns([relPath]);
+        _fileSystem.FileExists(@"C:\Target\conflict.txt").Returns(true);
+
+        var timestamp = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
+        _fileSystem.GetMetadata(@"C:\Source\conflict.txt")
+            .Returns(new FileMetadata(@"C:\Source\conflict.txt", 200, timestamp, timestamp));
+        _fileSystem.GetMetadata(@"C:\Target\conflict.txt")
+            .Returns(new FileMetadata(@"C:\Target\conflict.txt", 100, timestamp, timestamp));
+
+        var overwriteStrategy = _strategies.First(s => s.Key == OverwriteTargetStrategy.StrategyKey);
+        _ui.PromptForConflictResolution(Arg.Any<FileConflict>(), 1, 1, Arg.Any<IReadOnlyList<IConflictResolutionStrategy>>())
+           .Returns(overwriteStrategy);
+
+        _fileSystem.When(x => x.MoveFile(@"C:\Source\conflict.txt", @"C:\Target\conflict.txt", overwrite: true))
+                   .Do(_ => throw new IOException("Target file sharing violation during overwrite"));
+
+        // Act
+        var summary = await _orchestrator.ExecuteAsync(_source, _target, isDryRun: false);
+
+        // Assert
+        summary.ErrorsOccurred.Should().Be(1);
+        summary.ConflictsResolved.Should().Be(0);
+        summary.ConflictsSkipped.Should().Be(0);
+        _ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("conflict.txt") && msg.Contains("sharing violation")));
+    }
+
     #endregion
 
     #region Dry-Run Mode Tests
@@ -451,11 +482,39 @@ public sealed class MergeOrchestratorTests
     public void ConflictResolutionRunner_ResolveConflicts_WhenEmptyList_ReturnsZero()
     {
         // Act
-        var (resolved, skipped) = _conflictRunner.ResolveConflicts([], _source, _target, _strategies, false);
+        var (resolved, skipped, errors) = _conflictRunner.ResolveConflicts([], _source, _target, _strategies, false);
 
         // Assert
         resolved.Should().Be(0);
         skipped.Should().Be(0);
+        errors.Should().Be(0);
+    }
+
+    [Fact]
+    public void ConflictResolutionRunner_ResolveConflicts_WhenStrategyThrowsIOException_CatchesErrorAndIncrementsErrors()
+    {
+        // Arrange
+        var conflict = new FileConflict(
+            new RelativeFilePath("conflict.txt"),
+            new FileMetadata(@"C:\Source\conflict.txt", 200, DateTime.UtcNow, DateTime.UtcNow),
+            new FileMetadata(@"C:\Target\conflict.txt", 100, DateTime.UtcNow, DateTime.UtcNow));
+
+        var mockStrategy = Substitute.For<IConflictResolutionStrategy>();
+        mockStrategy.Key.Returns("custom");
+        mockStrategy.When(x => x.Execute(conflict, _source, _target))
+                    .Do(_ => throw new IOException("Locked during resolution"));
+
+        _ui.PromptForConflictResolution(conflict, 1, 1, Arg.Any<IReadOnlyList<IConflictResolutionStrategy>>())
+           .Returns(mockStrategy);
+
+        // Act
+        var (resolved, skipped, errors) = _conflictRunner.ResolveConflicts([conflict], _source, _target, [mockStrategy], isDryRun: false);
+
+        // Assert
+        resolved.Should().Be(0);
+        skipped.Should().Be(0);
+        errors.Should().Be(1);
+        _ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("conflict.txt") && msg.Contains("Locked during resolution")));
     }
 
     #endregion

@@ -24,7 +24,7 @@ public class ConflictResolutionRunner
         _ui = null!;
     }
 
-    public virtual (int Resolved, int Skipped) ResolveConflicts(
+    public virtual (int Resolved, int Skipped, int Errors) ResolveConflicts(
         IReadOnlyList<FileConflict> conflicts,
         DirectoryRoot source,
         DirectoryRoot target,
@@ -38,11 +38,12 @@ public class ConflictResolutionRunner
 
         if (conflicts.Count == 0)
         {
-            return (0, 0);
+            return (0, 0, 0);
         }
 
         var resolvedCount = 0;
         var skippedCount = 0;
+        var errorCount = 0;
 
         for (var i = 0; i < conflicts.Count; i++)
         {
@@ -60,14 +61,20 @@ public class ConflictResolutionRunner
                 continue;
             }
 
-            ExecuteResolutionStrategy(chosenStrategy, conflict, source, target, isDryRun);
-            resolvedCount++;
+            if (TryExecuteResolutionStrategy(chosenStrategy, conflict, source, target, isDryRun))
+            {
+                resolvedCount++;
+            }
+            else
+            {
+                errorCount++;
+            }
         }
 
-        return (resolvedCount, skippedCount);
+        return (resolvedCount, skippedCount, errorCount);
     }
 
-    private static void ExecuteResolutionStrategy(
+    private bool TryExecuteResolutionStrategy(
         IConflictResolutionStrategy strategy,
         FileConflict conflict,
         DirectoryRoot source,
@@ -76,10 +83,19 @@ public class ConflictResolutionRunner
     {
         if (isDryRun)
         {
-            return;
+            return true;
         }
 
-        strategy.Execute(conflict, source, target);
+        try
+        {
+            strategy.Execute(conflict, source, target);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _ui.ShowWarning($"Fehler beim Ausführen der Konfliktlösung für '{conflict.RelativePath.Value}': {ex.Message}");
+            return false;
+        }
     }
 
     private static bool IsSkipStrategy(IConflictResolutionStrategy strategy)

@@ -47,7 +47,8 @@ public class MergeOrchestrator
         var stopwatch = Stopwatch.StartNew();
 
         var scanResult = ScanAndPartitionFiles(source, target, isDryRun, cancellationToken);
-        var (conflictsResolved, conflictsSkipped) = ResolveConflicts(scanResult.ConflictQueue, source, target, isDryRun);
+        var (conflictsResolved, conflictsSkipped, resolutionErrors) = ResolveConflicts(scanResult.ConflictQueue, source, target, isDryRun);
+        scanResult.ErrorsOccurred += resolutionErrors;
 
         CleanupEmptyDirectories(source, isDryRun, scanResult);
 
@@ -182,7 +183,7 @@ public class MergeOrchestrator
         _fileSystem.DeleteFile(sourceFullPath);
     }
 
-    private (int Resolved, int Skipped) ResolveConflicts(
+    private (int Resolved, int Skipped, int Errors) ResolveConflicts(
         IReadOnlyList<FileConflict> conflicts,
         DirectoryRoot source,
         DirectoryRoot target,
@@ -190,7 +191,7 @@ public class MergeOrchestrator
     {
         if (conflicts.Count == 0)
         {
-            return (0, 0);
+            return (0, 0, 0);
         }
 
         return _conflictRunner.ResolveConflicts(conflicts, source, target, _strategies, isDryRun);
