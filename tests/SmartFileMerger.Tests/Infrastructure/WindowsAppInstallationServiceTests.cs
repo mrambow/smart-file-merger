@@ -169,14 +169,11 @@ public sealed class WindowsAppInstallationServiceTests : IDisposable
         File.Exists(installedExe).Should().BeTrue();
         File.ReadAllText(installedExe).Should().Be("dummy binary content");
 
-        if (OperatingSystem.IsWindows())
-        {
-            var desktopShortcut = Path.Combine(_desktopDir, "SmartFileMerger.lnk");
-            File.Exists(desktopShortcut).Should().BeTrue();
+        var desktopShortcut = Path.Combine(_desktopDir, "SmartFileMerger.lnk");
+        File.Exists(desktopShortcut).Should().BeTrue();
 
-            var startMenuShortcut = Path.Combine(_startMenuDir, "SmartFileMerger.lnk");
-            File.Exists(startMenuShortcut).Should().BeTrue();
-        }
+        var startMenuShortcut = Path.Combine(_startMenuDir, "SmartFileMerger.lnk");
+        File.Exists(startMenuShortcut).Should().BeTrue();
     }
 
     [Fact]
@@ -213,23 +210,20 @@ public sealed class WindowsAppInstallationServiceTests : IDisposable
 
         sut.InstallToUserProgramsAndCreateShortcuts();
 
-        if (OperatingSystem.IsWindows())
-        {
-            var desktopShortcut = Path.Combine(customDesktop, "SmartFileMerger.lnk");
-            File.Exists(desktopShortcut).Should().BeTrue();
+        var desktopShortcut = Path.Combine(customDesktop, "SmartFileMerger.lnk");
+        File.Exists(desktopShortcut).Should().BeTrue();
 
-            var startMenuShortcut = Path.Combine(customStartMenu, "SmartFileMerger.lnk");
-            File.Exists(startMenuShortcut).Should().BeTrue();
+        var startMenuShortcut = Path.Combine(customStartMenu, "SmartFileMerger.lnk");
+        File.Exists(startMenuShortcut).Should().BeTrue();
 
-            // Overwrite again with stale read-only shortcuts
-            File.SetAttributes(desktopShortcut, FileAttributes.ReadOnly);
-            File.SetAttributes(startMenuShortcut, FileAttributes.ReadOnly);
+        // Overwrite again with stale read-only shortcuts
+        File.SetAttributes(desktopShortcut, FileAttributes.ReadOnly);
+        File.SetAttributes(startMenuShortcut, FileAttributes.ReadOnly);
 
-            sut.InstallToUserProgramsAndCreateShortcuts();
+        sut.InstallToUserProgramsAndCreateShortcuts();
 
-            File.Exists(desktopShortcut).Should().BeTrue();
-            File.Exists(startMenuShortcut).Should().BeTrue();
-        }
+        File.Exists(desktopShortcut).Should().BeTrue();
+        File.Exists(startMenuShortcut).Should().BeTrue();
     }
 
     [Fact]
@@ -255,11 +249,8 @@ public sealed class WindowsAppInstallationServiceTests : IDisposable
         act.Should().NotThrow();
         File.ReadAllText(installedExe).Should().Be("already installed content");
 
-        if (OperatingSystem.IsWindows())
-        {
-            File.Exists(Path.Combine(_desktopDir, "SmartFileMerger.lnk")).Should().BeTrue();
-            File.Exists(Path.Combine(_startMenuDir, "SmartFileMerger.lnk")).Should().BeTrue();
-        }
+        File.Exists(Path.Combine(_desktopDir, "SmartFileMerger.lnk")).Should().BeTrue();
+        File.Exists(Path.Combine(_startMenuDir, "SmartFileMerger.lnk")).Should().BeTrue();
     }
 
     [Fact]

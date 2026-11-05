@@ -127,8 +127,12 @@ public static class Program
         {
             installer.InstallToUserProgramsAndCreateShortcuts();
             ui.ShowInfo($"SmartFileMerger wurde erfolgreich installiert nach: {installer.GetInstalledDirectoryPath()}");
-            var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
-            processLauncher.Start(installer.GetInstalledExecutablePath(), args);
+            var processLauncher = serviceProvider.GetRequiredService<IProcessLauncher>();
+            var started = processLauncher.Start(installer.GetInstalledExecutablePath(), args);
+            if (!started)
+            {
+                ui.ShowWarning("Die installierte Anwendung konnte nicht automatisch gestartet werden.");
+            }
             return true;
         }
         catch (Exception ex)
@@ -176,13 +180,21 @@ public static class Program
         ui.ShowUpdateNotice(checkResult.latestVersion, checkResult.releaseUrl);
 
         var updateDownloader = serviceProvider.GetService<IUpdateDownloadService>();
-        var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
         if (updateDownloader is null)
         {
             return false;
         }
 
-        return await HandleUpdateInstallationAsync(updateDownloader, processLauncher, ui, checkResult.latestVersion, checkResult.releaseUrl, args);
+        var downloadUrl = ResolveDownloadUrl(checkResult.latestVersion, checkResult.releaseUrl);
+        if (!updateDownloader.IsValidDownloadUrl(downloadUrl))
+        {
+            ui.ShowWarning($"Die Update-URL '{downloadUrl}' ist ungültig oder stammt von einem nicht vertrauenswürdigen Host.");
+            return false;
+        }
+
+        var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
+
+        return await HandleUpdateInstallationAsync(updateDownloader, processLauncher, ui, checkResult.latestVersion, downloadUrl, args);
     }
 
     private static async Task<bool> HandleUpdateInstallationAsync(
@@ -190,7 +202,7 @@ public static class Program
         IProcessLauncher processLauncher,
         IUserInterface ui,
         string latestVersion,
-        string releaseUrl,
+        string downloadUrl,
         string[]? args)
     {
         if (!ui.PromptForUpdateInstallation(latestVersion))
@@ -198,7 +210,6 @@ public static class Program
             return false;
         }
 
-        var downloadUrl = ResolveDownloadUrl(latestVersion, releaseUrl);
         var updateApplied = false;
 
         try
@@ -221,7 +232,7 @@ public static class Program
         }
 
         ui.ShowInfo(UpdateSuccessMessage);
-        RestartApplication(processLauncher, args);
+        RestartApplication(processLauncher, ui, args);
         return true;
     }
 
@@ -250,7 +261,7 @@ public static class Program
         return $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases/download/{normalizedVersion}/{ExeFileName}";
     }
 
-    private static void RestartApplication(IProcessLauncher processLauncher, string[]? args)
+    private static void RestartApplication(IProcessLauncher processLauncher, IUserInterface ui, string[]? args)
     {
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(exePath))
@@ -258,7 +269,11 @@ public static class Program
             return;
         }
 
-        processLauncher.Start(exePath, args);
+        var started = processLauncher.Start(exePath, args);
+        if (!started)
+        {
+            ui.ShowWarning("Die Anwendung konnte nicht automatisch neu gestartet werden. Bitte starten Sie sie manuell neu.");
+        }
     }
 
     private static async Task<int> ExecuteMergeWorkflowAsync(

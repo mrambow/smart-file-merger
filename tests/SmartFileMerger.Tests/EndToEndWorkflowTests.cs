@@ -604,6 +604,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         var installer = Substitute.For<IAppInstallationService>();
 
         installer.IsRunningFromInstalledLocation().Returns(true);
+        updateDownloader.IsValidDownloadUrl(Arg.Any<string>()).Returns(true);
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((false, string.Empty, string.Empty));
 
@@ -836,6 +837,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         var installer = Substitute.For<IAppInstallationService>();
 
         installer.IsRunningFromInstalledLocation().Returns(true);
+        updateDownloader.IsValidDownloadUrl(Arg.Any<string>()).Returns(true);
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
 
@@ -904,6 +906,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         var installer = Substitute.For<IAppInstallationService>();
 
         installer.IsRunningFromInstalledLocation().Returns(true);
+        updateDownloader.IsValidDownloadUrl(Arg.Any<string>()).Returns(true);
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
 
@@ -958,6 +961,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         var installer = Substitute.For<IAppInstallationService>();
 
         installer.IsRunningFromInstalledLocation().Returns(true);
+        updateDownloader.IsValidDownloadUrl(Arg.Any<string>()).Returns(true);
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
 
@@ -988,6 +992,48 @@ public sealed class EndToEndWorkflowTests : IDisposable
             Arg.Any<string>(),
             Arg.Any<Action<double>>(),
             Arg.Any<CancellationToken>());
+        ui.Received(1).ConfirmMerge(source, target, false);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenUpdateUrlIsInvalid_ShowsWarningAndContinuesWithoutPrompting()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(true);
+        updateDownloader.IsValidDownloadUrl(Arg.Any<string>()).Returns(false);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((true, "v2.1.0", "http://untrusted-http.com/malicious"));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(provider, ui);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.DidNotReceive().PromptForUpdateInstallation(Arg.Any<string>());
+        ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("nicht vertrauenswürdigen")));
         ui.Received(1).ConfirmMerge(source, target, false);
     }
 

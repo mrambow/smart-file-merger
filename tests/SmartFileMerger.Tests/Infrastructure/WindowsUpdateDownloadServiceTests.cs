@@ -144,13 +144,17 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
         const string newPayload = "v1.1.0 new binary payload content";
         var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
 
-        var httpClient = CreateHttpClientWithResponder(_ =>
+        var httpClient = CreateHttpClientWithResponder(req =>
         {
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            if (req.RequestUri!.AbsoluteUri.EndsWith(".sha256"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(payloadBytes)
             };
-            return response;
         });
 
         var progressValues = new List<double>();
@@ -364,6 +368,121 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
         var act = async () => await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, null!);
 
         await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Theory]
+    [InlineData("https://github.com/mrambow/smart-file-merger/releases/download/v1.0.0/SmartFileMerger.exe", true)]
+    [InlineData("https://objects.githubusercontent.com/github-production-release-asset-2e65be/123", true)]
+    [InlineData("https://raw.githubusercontent.com/mrambow/smart-file-merger/main/README.md", true)]
+    [InlineData("http://github.com/mrambow/smart-file-merger/releases/download/v1.0.0/SmartFileMerger.exe", false)]
+    [InlineData("https://evil.com/malicious.exe", false)]
+    [InlineData("not-a-url", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsValidDownloadUrl_ValidatesAllowedHostsAndHttps(string? url, bool expectedResult)
+    {
+        using var sut = new WindowsUpdateDownloadService();
+
+        var result = sut.IsValidDownloadUrl(url!);
+
+        result.Should().Be(expectedResult);
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenContentLengthMismatchesDownloadedBytes_ReturnsFalseAndRollsBack()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        var httpClient = CreateHttpClientWithResponder(req =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("actual content 18b"))
+            };
+            response.Content.Headers.ContentLength = 9999;
+            return response;
+        });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("current binary");
+        File.Exists(_newPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenSha256ChecksumMatches_Succeeds()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        const string newPayload = "new verified payload";
+        var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var expectedHash = Convert.ToHexString(sha256.ComputeHash(payloadBytes));
+
+        var httpClient = CreateHttpClientWithResponder(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.EndsWith(".sha256"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"{expectedHash}  SmartFileMerger.exe\n")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payloadBytes)
+            };
+        });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, _ => { });
+
+        success.Should().BeTrue();
+        File.ReadAllText(_exePath).Should().Be(newPayload);
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenSha256ChecksumMismatches_ReturnsFalseAndRollsBack()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        const string newPayload = "tampered payload";
+        var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
+
+        var httpClient = CreateHttpClientWithResponder(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.EndsWith(".sha256"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("0000000000000000000000000000000000000000000000000000000000000000  SmartFileMerger.exe\n")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payloadBytes)
+            };
+        });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("current binary");
+        File.Exists(_newPath).Should().BeFalse();
     }
 
     [Fact]

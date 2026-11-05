@@ -6,6 +6,11 @@ namespace SmartFileMerger.Domain.Interfaces;
 public interface IUpdateDownloadService
 {
     /// <summary>
+    /// Prüft, ob die angegebene Update-URL sicher, syntaktisch gültig und von einem erlaubten Host stammt.
+    /// </summary>
+    bool IsValidDownloadUrl(string downloadUrl);
+
+    /// <summary>
     /// Entfernt eine eventuell vorhandene alte ausführbare Datei (.old) aus einem vorherigen Update-Vorgang.
     /// </summary>
     void CleanupOldExecutableIfExists();
