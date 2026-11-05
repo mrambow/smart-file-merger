@@ -644,9 +644,19 @@ public sealed class EndToEndWorkflowTests : IDisposable
         var installer = Substitute.For<IAppInstallationService>();
 
         const string installedPath = @"C:\Users\test\AppData\Local\Programs\SmartFileMerger";
+        const string installedExe = @"C:\Users\test\AppData\Local\Programs\SmartFileMerger\SmartFileMerger.exe";
         installer.IsRunningFromInstalledLocation().Returns(false);
         installer.GetInstalledDirectoryPath().Returns(installedPath);
+        installer.GetInstalledExecutablePath().Returns(installedExe);
         ui.PromptForInstallation().Returns(true);
+
+        var processLaunched = false;
+        string? launchedPath = null;
+        Program.ProcessLauncher = path =>
+        {
+            processLaunched = true;
+            launchedPath = path;
+        };
 
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((false, string.Empty, string.Empty));
@@ -675,6 +685,57 @@ public sealed class EndToEndWorkflowTests : IDisposable
         ui.Received(1).PromptForInstallation();
         installer.Received(1).InstallToUserProgramsAndCreateShortcuts();
         ui.Received(1).ShowInfo(Arg.Is<string>(msg => msg.Contains(installedPath)));
+        processLaunched.Should().BeTrue();
+        launchedPath.Should().Be(installedExe);
+        ui.DidNotReceive().PromptConfiguration();
+        ui.DidNotReceive().ConfirmMerge(Arg.Any<DirectoryRoot>(), Arg.Any<DirectoryRoot>(), Arg.Any<bool>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenInstallationThrows_ShowsWarningAndContinuesWorkflow()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(false);
+        ui.PromptForInstallation().Returns(true);
+        installer.When(x => x.InstallToUserProgramsAndCreateShortcuts())
+                 .Do(_ => throw new UnauthorizedAccessException("Simulated access denied during shortcut creation"));
+
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(args: null, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptForInstallation();
+        installer.Received(1).InstallToUserProgramsAndCreateShortcuts();
+        ui.Received(1).ShowWarning(Arg.Is<string>(msg => msg.Contains("Simulated access denied")));
+        ui.Received(1).PromptConfiguration();
+        ui.Received(1).ConfirmMerge(source, target, false);
     }
 
     [Fact]

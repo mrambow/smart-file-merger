@@ -86,7 +86,10 @@ public static class Program
         CleanupOldExecutable(serviceProvider);
         ui.ShowHeader();
 
-        PerformInitialSetupIfRequested(serviceProvider, ui, args);
+        if (TryPerformInitialSetup(serviceProvider, ui, args))
+        {
+            return SuccessExitCode;
+        }
 
         var updateApplied = await TryApplyUpdateIfAvailableAsync(serviceProvider, ui);
         if (updateApplied)
@@ -103,7 +106,7 @@ public static class Program
         updateDownloader?.CleanupOldExecutableIfExists();
     }
 
-    private static void PerformInitialSetupIfRequested(
+    private static bool TryPerformInitialSetup(
         IServiceProvider serviceProvider,
         IUserInterface ui,
         string[]? args)
@@ -111,22 +114,25 @@ public static class Program
         var installer = serviceProvider.GetService<IAppInstallationService>();
         if (installer is null || installer.IsRunningFromInstalledLocation() || HasDirectCliArguments(args))
         {
-            return;
+            return false;
         }
 
         if (!ui.PromptForInstallation())
         {
-            return;
+            return false;
         }
 
         try
         {
             installer.InstallToUserProgramsAndCreateShortcuts();
             ui.ShowInfo($"SmartFileMerger wurde erfolgreich installiert nach: {installer.GetInstalledDirectoryPath()}");
+            LaunchProcess(installer.GetInstalledExecutablePath());
+            return true;
         }
         catch (Exception ex)
         {
             ui.ShowWarning($"Installation konnte nicht abgeschlossen werden: {ex.Message}");
+            return false;
         }
     }
 
@@ -226,6 +232,16 @@ public static class Program
     private static void RestartApplication()
     {
         var exePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return;
+        }
+
+        LaunchProcess(exePath);
+    }
+
+    private static void LaunchProcess(string exePath)
+    {
         if (string.IsNullOrWhiteSpace(exePath))
         {
             return;
