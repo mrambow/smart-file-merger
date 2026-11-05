@@ -137,16 +137,15 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
 
         var totalBytes = response.Content.Headers.ContentLength;
         await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using (var fileStream = new FileStream(
+        await using var fileStream = new FileStream(
             destinationFilePath,
             FileMode.Create,
             FileAccess.Write,
             FileShare.None,
             BufferSize,
-            useAsync: true))
-        {
-            await StreamWithProgressAsync(contentStream, fileStream, totalBytes, progressCallback, cancellationToken);
-        }
+            useAsync: true);
+
+        await StreamWithProgressAsync(contentStream, fileStream, totalBytes, progressCallback, cancellationToken);
     }
 
     private static async Task StreamWithProgressAsync(
@@ -254,13 +253,15 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
     {
         try
         {
-            if (File.Exists(filePath))
+            if (!File.Exists(filePath))
             {
-                var attributes = File.GetAttributes(filePath);
-                if ((attributes & FileAttributes.ReadOnly) != 0)
-                {
-                    File.SetAttributes(filePath, attributes & ~FileAttributes.ReadOnly);
-                }
+                return;
+            }
+
+            var attributes = File.GetAttributes(filePath);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+            {
+                File.SetAttributes(filePath, attributes & ~FileAttributes.ReadOnly);
             }
         }
         catch
