@@ -618,6 +618,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -724,6 +725,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -769,6 +771,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -809,6 +812,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -934,6 +938,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -977,6 +982,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -1021,6 +1027,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(Substitute.For<IProcessLauncher>());
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();

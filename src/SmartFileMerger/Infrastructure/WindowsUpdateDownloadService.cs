@@ -16,6 +16,7 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
     private const string ChecksumExtension = ".sha256";
     private const string UserAgentHeader = "SmartFileMerger";
     private const int BufferSize = 81920;
+    private const int Sha256HexLength = 64;
 
     private static readonly HashSet<string> AllowedHosts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -62,7 +63,7 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
             return false;
         }
 
-        return uri.Scheme == Uri.UriSchemeHttps && AllowedHosts.Contains(uri.Host);
+        return IsValidUri(uri);
     }
 
     public void CleanupOldExecutableIfExists()
@@ -87,12 +88,10 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(progressCallback);
-        if (string.IsNullOrWhiteSpace(downloadUrl))
+        if (!IsValidDownloadUrl(downloadUrl))
         {
             return false;
         }
-
-        ValidateDownloadUrl(downloadUrl);
 
         var exePath = ResolveExecutablePath();
         if (string.IsNullOrWhiteSpace(exePath) || !_fileSystemService.FileExists(exePath))
@@ -109,31 +108,11 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
             SwapExecutables(exePath, oldPath, newPath);
             return true;
         }
-        catch (InvalidOperationException)
-        {
-            RollbackFailedUpdate(exePath, oldPath, newPath);
-            throw;
-        }
         catch
         {
             RollbackFailedUpdate(exePath, oldPath, newPath);
             return false;
         }
-    }
-
-    private static void ValidateDownloadUrl(string downloadUrl)
-    {
-        if (string.IsNullOrWhiteSpace(downloadUrl))
-        {
-            throw new ArgumentException("Download URL cannot be empty.", nameof(downloadUrl));
-        }
-
-        if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var uri))
-        {
-            throw new ArgumentException("Invalid download URL format.", nameof(downloadUrl));
-        }
-
-        ValidateUriSecurity(uri);
     }
 
     public void Dispose()
@@ -144,18 +123,8 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         }
     }
 
-    private static void ValidateUriSecurity(Uri uri)
-    {
-        if (uri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new InvalidOperationException("Update downloads must use HTTPS.");
-        }
-
-        if (!AllowedHosts.Contains(uri.Host))
-        {
-            throw new InvalidOperationException($"Update download host '{uri.Host}' is not permitted.");
-        }
-    }
+    private static bool IsValidUri(Uri uri) =>
+        uri.Scheme == Uri.UriSchemeHttps && AllowedHosts.Contains(uri.Host);
 
     private void TryCleanupStaleUpdateFiles()
     {
@@ -200,9 +169,9 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         response.EnsureSuccessStatusCode();
 
         var responseUri = response.RequestMessage?.RequestUri;
-        if (responseUri is not null)
+        if (responseUri is not null && !IsValidUri(responseUri))
         {
-            ValidateUriSecurity(responseUri);
+            throw new InvalidOperationException($"Redirect to untrusted host '{responseUri.Host}' is not permitted.");
         }
 
         var totalBytes = response.Content.Headers.ContentLength;
@@ -219,58 +188,37 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         }
 
         VerifyDownloadedFile(destinationFilePath, totalBytes);
-        await VerifyChecksumIfExistsAsync(downloadUrl, destinationFilePath, cancellationToken);
+        await VerifyChecksumAsync(downloadUrl, destinationFilePath, cancellationToken);
     }
 
-    private async Task VerifyChecksumIfExistsAsync(
+    private async Task VerifyChecksumAsync(
         string downloadUrl,
         string destinationFilePath,
         CancellationToken cancellationToken)
     {
         var sha256Url = downloadUrl + ChecksumExtension;
-        string? sha256Content = null;
 
-        try
-        {
-            using var shaRequest = new HttpRequestMessage(HttpMethod.Get, sha256Url);
-            ApplyUserAgentIfMissing(shaRequest);
-            using var shaResponse = await _httpClient.SendAsync(shaRequest, cancellationToken);
-            if (!shaResponse.IsSuccessStatusCode)
-            {
-                return;
-            }
+        using var shaRequest = new HttpRequestMessage(HttpMethod.Get, sha256Url);
+        ApplyUserAgentIfMissing(shaRequest);
+        using var shaResponse = await _httpClient.SendAsync(shaRequest, cancellationToken);
+        shaResponse.EnsureSuccessStatusCode();
 
-            var shaUri = shaResponse.RequestMessage?.RequestUri;
-            if (shaUri is not null)
-            {
-                ValidateUriSecurity(shaUri);
-            }
-
-            sha256Content = await shaResponse.Content.ReadAsStringAsync(cancellationToken);
-        }
-        catch (InvalidOperationException)
+        var shaUri = shaResponse.RequestMessage?.RequestUri;
+        if (shaUri is not null && !IsValidUri(shaUri))
         {
-            throw;
-        }
-        catch
-        {
-            return;
+            throw new InvalidOperationException($"Checksum redirect to untrusted host '{shaUri.Host}' is not permitted.");
         }
 
+        var sha256Content = await shaResponse.Content.ReadAsStringAsync(cancellationToken);
         ValidateChecksum(sha256Content, destinationFilePath);
     }
 
-    private static void ValidateChecksum(string? sha256Content, string destinationFilePath)
+    private static void ValidateChecksum(string sha256Content, string destinationFilePath)
     {
-        if (string.IsNullOrWhiteSpace(sha256Content))
-        {
-            return;
-        }
-
         var expectedHash = ExtractHash(sha256Content);
-        if (string.IsNullOrWhiteSpace(expectedHash))
+        if (expectedHash.Length != Sha256HexLength || !expectedHash.All(Uri.IsHexDigit))
         {
-            return;
+            throw new InvalidDataException($"Invalid SHA256 checksum format: '{expectedHash}'.");
         }
 
         var actualHash = ComputeSha256Hex(destinationFilePath);

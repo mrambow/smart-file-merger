@@ -192,7 +192,7 @@ public static class Program
             return false;
         }
 
-        var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
+        var processLauncher = serviceProvider.GetRequiredService<IProcessLauncher>();
 
         return await HandleUpdateInstallationAsync(updateDownloader, processLauncher, ui, checkResult.latestVersion, downloadUrl, args);
     }

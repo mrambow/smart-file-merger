@@ -143,12 +143,17 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
 
         const string newPayload = "v1.1.0 new binary payload content";
         var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+        var expectedHash = Convert.ToHexString(sha256.ComputeHash(payloadBytes));
 
         var httpClient = CreateHttpClientWithResponder(req =>
         {
             if (req.RequestUri!.AbsoluteUri.EndsWith(".sha256"))
             {
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"{expectedHash}  SmartFileMerger.exe\n")
+                };
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -281,31 +286,61 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DownloadAndApplyUpdateAsync_WhenUrlIsNotHttps_ThrowsInvalidOperationException()
+    public async Task DownloadAndApplyUpdateAsync_WhenUrlIsNotHttps_ReturnsFalse()
     {
         File.WriteAllText(_exePath, "current binary");
         using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
 
-        var act = async () => await sut.DownloadAndApplyUpdateAsync(
+        var success = await sut.DownloadAndApplyUpdateAsync(
             "http://github.com/mrambow/smart-file-merger/releases/download/v1.0.0/SmartFileMerger.exe",
             _ => { });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*HTTPS*");
+        success.Should().BeFalse();
     }
 
     [Fact]
-    public async Task DownloadAndApplyUpdateAsync_WhenHostIsNotPermitted_ThrowsInvalidOperationException()
+    public async Task DownloadAndApplyUpdateAsync_WhenHostIsNotPermitted_ReturnsFalse()
     {
         File.WriteAllText(_exePath, "current binary");
         using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
 
-        var act = async () => await sut.DownloadAndApplyUpdateAsync(
+        var success = await sut.DownloadAndApplyUpdateAsync(
             "https://evil.com/downloads/SmartFileMerger.exe",
             _ => { });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not permitted*");
+        success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenChecksumAssetMissing_ReturnsFalseAndRollsBack()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        const string newPayload = "new binary without checksum asset";
+        var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
+
+        var httpClient = CreateHttpClientWithResponder(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.EndsWith(".sha256"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payloadBytes)
+            };
+        });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("current binary");
+        File.Exists(_newPath).Should().BeFalse();
     }
 
     [Fact]
