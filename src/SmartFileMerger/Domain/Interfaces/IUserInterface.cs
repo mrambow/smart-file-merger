@@ -11,6 +11,21 @@ public interface IUserInterface
 
     void ShowUpdateNotice(string latestVersion, string releaseUrl);
 
+    /// <summary>
+    /// Fragt den Benutzer, ob SmartFileMerger installiert werden soll (Desktop- und Startmenü-Verknüpfung).
+    /// </summary>
+    bool PromptForInstallation();
+
+    /// <summary>
+    /// Fragt den Benutzer, ob ein verfügbares Update automatisch heruntergeladen und installiert werden soll.
+    /// </summary>
+    bool PromptForUpdateInstallation(string latestVersion);
+
+    /// <summary>
+    /// Führt die übergebene Download-Aktion mit einer Fortschrittsanzeige in Prozent aus.
+    /// </summary>
+    void RunWithDownloadProgress(string version, Func<Action<double>, Task> downloadWork);
+
     (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) PromptConfiguration();
 
     bool ConfirmMerge(DirectoryRoot source, DirectoryRoot target, bool isDryRun);

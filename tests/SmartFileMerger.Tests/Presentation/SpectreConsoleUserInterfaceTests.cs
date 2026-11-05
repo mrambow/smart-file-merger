@@ -74,6 +74,163 @@ public class SpectreConsoleUserInterfaceTests
 
     #endregion
 
+    #region PromptForInstallation Tests
+
+    [Fact]
+    public void PromptForInstallation_WhenUserConfirms_OutputsPromptAndReturnsTrue()
+    {
+        // Arrange
+        _console.Input.PushTextWithEnter("y");
+
+        // Act
+        var result = _sut.PromptForInstallation();
+
+        // Assert
+        result.Should().BeTrue();
+        _console.Output.Should().Contain("Möchtest du SmartFileMerger installieren");
+        _console.Output.Should().Contain("Desktop- und Startmenü-Verknüpfung anlegen");
+    }
+
+    [Fact]
+    public void PromptForInstallation_WhenUserDeclines_OutputsPromptAndReturnsFalse()
+    {
+        // Arrange
+        _console.Input.PushTextWithEnter("n");
+
+        // Act
+        var result = _sut.PromptForInstallation();
+
+        // Assert
+        result.Should().BeFalse();
+        _console.Output.Should().Contain("Möchtest du SmartFileMerger installieren");
+    }
+
+    #endregion
+
+    #region PromptForUpdateInstallation Tests
+
+    [Fact]
+    public void PromptForUpdateInstallation_WhenUserConfirms_OutputsEscapedVersionAndReturnsTrue()
+    {
+        // Arrange
+        const string version = "2.2.0";
+        _console.Input.PushTextWithEnter("y");
+
+        // Act
+        var result = _sut.PromptForUpdateInstallation(version);
+
+        // Assert
+        result.Should().BeTrue();
+        _console.Output.Should().Contain("Ein neues Update");
+        _console.Output.Should().Contain("2.2.0");
+        _console.Output.Should().Contain("Jetzt automatisch herunterladen und installieren?");
+    }
+
+    [Fact]
+    public void PromptForUpdateInstallation_WhenUserDeclines_ReturnsFalse()
+    {
+        // Arrange
+        const string version = "2.2.0";
+        _console.Input.PushTextWithEnter("n");
+
+        // Act
+        var result = _sut.PromptForUpdateInstallation(version);
+
+        // Assert
+        result.Should().BeFalse();
+        _console.Output.Should().Contain("2.2.0");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void PromptForUpdateInstallation_WhenVersionNullOrWhiteSpace_ThrowsArgumentException(string? invalidVersion)
+    {
+        // Act
+        var act = () => _sut.PromptForUpdateInstallation(invalidVersion!);
+
+        // Assert
+        act.Should().Throw<ArgumentException>();
+    }
+
+    #endregion
+
+    #region RunWithDownloadProgress Tests
+
+    [Fact]
+    public void RunWithDownloadProgress_WhenExecutedWithRatio_CallsWorkAndReportsProgress()
+    {
+        // Arrange
+        const string version = "2.2.0";
+        var progressValues = new List<double>();
+
+        // Act
+        _sut.RunWithDownloadProgress(version, async reportProgress =>
+        {
+            reportProgress(0.25);
+            progressValues.Add(0.25);
+
+            reportProgress(0.75);
+            progressValues.Add(0.75);
+
+            await Task.CompletedTask;
+        });
+
+        // Assert
+        progressValues.Should().ContainInOrder(0.25, 0.75);
+        _console.Output.Should().Contain("2.2.0");
+    }
+
+    [Fact]
+    public void RunWithDownloadProgress_WhenExecutedWithPercentage_CallsWorkAndReportsProgress()
+    {
+        // Arrange
+        const string version = "3.0.0";
+        var progressValues = new List<double>();
+
+        // Act
+        _sut.RunWithDownloadProgress(version, async reportProgress =>
+        {
+            reportProgress(50.0);
+            progressValues.Add(50.0);
+
+            reportProgress(100.0);
+            progressValues.Add(100.0);
+
+            await Task.CompletedTask;
+        });
+
+        // Assert
+        progressValues.Should().ContainInOrder(50.0, 100.0);
+        _console.Output.Should().Contain("3.0.0");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RunWithDownloadProgress_WhenVersionNullOrWhiteSpace_ThrowsArgumentException(string? invalidVersion)
+    {
+        // Act
+        var act = () => _sut.RunWithDownloadProgress(invalidVersion!, _ => Task.CompletedTask);
+
+        // Assert
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void RunWithDownloadProgress_WhenDownloadWorkNull_ThrowsArgumentNullException()
+    {
+        // Act
+        var act = () => _sut.RunWithDownloadProgress("2.2.0", null!);
+
+        // Assert
+        act.Should().Throw<ArgumentNullException>();
+    }
+
+    #endregion
+
     #region ShowInfo / ShowWarning / ShowError Tests
 
     [Fact]

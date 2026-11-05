@@ -52,6 +52,60 @@ public sealed class SpectreConsoleUserInterface : IUserInterface
         _console.Write(panel);
     }
 
+    public bool PromptForInstallation()
+    {
+        return _console.Confirm(
+            "Möchtest du SmartFileMerger installieren (Desktop- und Startmenü-Verknüpfung anlegen)?",
+            defaultValue: true);
+    }
+
+    public bool PromptForUpdateInstallation(string latestVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(latestVersion);
+
+        return _console.Confirm(
+            $"Ein neues Update ({Markup.Escape(latestVersion)}) ist verfügbar! Jetzt automatisch herunterladen und installieren?",
+            defaultValue: true);
+    }
+
+    public void RunWithDownloadProgress(string version, Func<Action<double>, Task> downloadWork)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        ArgumentNullException.ThrowIfNull(downloadWork);
+
+        _console.Progress()
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new SpinnerColumn())
+            .Start(ctx => ExecuteDownloadProgress(ctx, version, downloadWork));
+    }
+
+    private static void ExecuteDownloadProgress(
+        ProgressContext ctx,
+        string version,
+        Func<Action<double>, Task> downloadWork)
+    {
+        var description = $"[green]Lade Update ({Markup.Escape(version)}) herunter[/]";
+        var progressTask = ctx.AddTask(description, maxValue: 100);
+
+        downloadWork(progress => UpdateDownloadProgress(progressTask, progress))
+            .GetAwaiter()
+            .GetResult();
+
+        progressTask.Value = 100;
+    }
+
+    private static void UpdateDownloadProgress(ProgressTask progressTask, double progress)
+    {
+        var percentage = progress <= 1.0 && progress > 0.0
+            ? progress * 100.0
+            : progress;
+
+        progressTask.Value = Math.Clamp(percentage, 0.0, 100.0);
+    }
+
     public (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) PromptConfiguration()
     {
         var source = PromptSourceDirectory();
