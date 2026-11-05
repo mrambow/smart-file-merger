@@ -1,6 +1,7 @@
 namespace SmartFileMerger.Infrastructure;
 
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using SmartFileMerger.Domain.Interfaces;
 
@@ -34,7 +35,18 @@ public sealed class WindowsAppInstallationService : IAppInstallationService
         _processPathAccessor = processPathAccessor ?? (() => Environment.ProcessPath);
         _localAppDataPath = localAppDataOverride ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         _desktopPath = desktopOverride ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        _startMenuProgramsPath = startMenuOverride ?? Path.Combine(
+        _startMenuProgramsPath = startMenuOverride ?? ResolveStartMenuProgramsPath();
+    }
+
+    private static string ResolveStartMenuProgramsPath()
+    {
+        var programsPath = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+        if (!string.IsNullOrWhiteSpace(programsPath))
+        {
+            return programsPath;
+        }
+
+        return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
             ProgramsFolderName);
     }
@@ -89,7 +101,7 @@ public sealed class WindowsAppInstallationService : IAppInstallationService
         }
 
         var cleanPath = Path.GetFullPath(processPath.Trim().Trim('\"', '\''));
-        if (!File.Exists(cleanPath))
+        if (!_fileSystemService.FileExists(cleanPath))
         {
             throw new FileNotFoundException($"Current executable was not found at '{cleanPath}'.", cleanPath);
         }
@@ -99,19 +111,12 @@ public sealed class WindowsAppInstallationService : IAppInstallationService
 
     private void CopyExecutableToInstallLocation(string sourceExecutablePath, string targetExecutablePath)
     {
-        _fileSystemService.EnsureDirectoryExistsForFile(targetExecutablePath);
-
         if (string.Equals(sourceExecutablePath, targetExecutablePath, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        if (_fileSystemService.FileExists(targetExecutablePath))
-        {
-            StripReadOnlyAttribute(targetExecutablePath);
-        }
-
-        File.Copy(sourceExecutablePath, targetExecutablePath, overwrite: true);
+        _fileSystemService.CopyFile(sourceExecutablePath, targetExecutablePath, overwrite: true);
     }
 
     private void CreateShortcuts(string targetExecutablePath)
@@ -131,7 +136,7 @@ public sealed class WindowsAppInstallationService : IAppInstallationService
 
             if (_fileSystemService.FileExists(shortcutFilePath))
             {
-                StripReadOnlyAttribute(shortcutFilePath);
+                _fileSystemService.StripReadOnlyAttribute(shortcutFilePath);
             }
 
             if (OperatingSystem.IsWindows())
@@ -159,27 +164,42 @@ public sealed class WindowsAppInstallationService : IAppInstallationService
             return;
         }
 
-        dynamic shell = Activator.CreateInstance(shellType)!;
-        dynamic shortcut = shell.CreateShortcut(shortcutFilePath);
-        shortcut.TargetPath = targetExecutablePath;
-        shortcut.WorkingDirectory = Path.GetDirectoryName(targetExecutablePath) ?? string.Empty;
-        shortcut.Description = ShortcutDescription;
-        shortcut.Save();
-    }
-
-    private static void StripReadOnlyAttribute(string filePath)
-    {
+        object? shell = null;
+        object? shortcut = null;
         try
         {
-            var attributes = File.GetAttributes(filePath);
-            if ((attributes & FileAttributes.ReadOnly) != 0)
+            shell = Activator.CreateInstance(shellType);
+            if (shell is null)
             {
-                File.SetAttributes(filePath, attributes & ~FileAttributes.ReadOnly);
+                return;
             }
+
+            dynamic dynamicShell = shell;
+            shortcut = dynamicShell.CreateShortcut(shortcutFilePath);
+            if (shortcut is null)
+            {
+                return;
+            }
+
+            dynamic dynamicShortcut = shortcut;
+            dynamicShortcut.TargetPath = targetExecutablePath;
+            dynamicShortcut.WorkingDirectory = Path.GetDirectoryName(targetExecutablePath) ?? string.Empty;
+            dynamicShortcut.Description = ShortcutDescription;
+            dynamicShortcut.Save();
         }
-        catch
+        finally
         {
-            // Best effort attribute clearing
+            ReleaseComObject(shortcut);
+            ReleaseComObject(shell);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void ReleaseComObject(object? comObject)
+    {
+        if (OperatingSystem.IsWindows() && comObject is not null && Marshal.IsComObject(comObject))
+        {
+            Marshal.FinalReleaseComObject(comObject);
         }
     }
 }

@@ -68,21 +68,21 @@ public sealed class SpectreConsoleUserInterface : IUserInterface
             defaultValue: true);
     }
 
-    public void RunWithDownloadProgress(string version, Func<Action<double>, Task> downloadWork)
+    public async Task RunWithDownloadProgressAsync(string version, Func<Action<double>, Task> downloadWork)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         ArgumentNullException.ThrowIfNull(downloadWork);
 
-        _console.Progress()
+        await _console.Progress()
             .Columns(
                 new TaskDescriptionColumn(),
                 new ProgressBarColumn(),
                 new PercentageColumn(),
                 new SpinnerColumn())
-            .Start(ctx => ExecuteDownloadProgress(ctx, version, downloadWork));
+            .StartAsync(async ctx => await ExecuteDownloadProgressAsync(ctx, version, downloadWork));
     }
 
-    private static void ExecuteDownloadProgress(
+    private static async Task ExecuteDownloadProgressAsync(
         ProgressContext ctx,
         string version,
         Func<Action<double>, Task> downloadWork)
@@ -90,20 +90,15 @@ public sealed class SpectreConsoleUserInterface : IUserInterface
         var description = $"[green]Lade Update ({Markup.Escape(version)}) herunter[/]";
         var progressTask = ctx.AddTask(description, maxValue: 100);
 
-        downloadWork(progress => UpdateDownloadProgress(progressTask, progress))
-            .GetAwaiter()
-            .GetResult();
+        await downloadWork(progress => UpdateDownloadProgress(progressTask, progress));
 
         progressTask.Value = 100;
     }
 
     private static void UpdateDownloadProgress(ProgressTask progressTask, double progress)
     {
-        var percentage = progress <= 1.0 && progress > 0.0
-            ? progress * 100.0
-            : progress;
-
-        progressTask.Value = Math.Clamp(percentage, 0.0, 100.0);
+        var percentage = Math.Clamp(progress * 100.0, 0.0, 100.0);
+        progressTask.Value = percentage;
     }
 
     public (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) PromptConfiguration()

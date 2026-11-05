@@ -30,8 +30,15 @@ jobs:
       - name: Publish self-contained executable
         run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./publish
 
+      - name: Generate SHA256 checksum
+        run: |
+          $hash = (Get-FileHash ./publish/SmartFileMerger.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SmartFileMerger.exe" | Out-File -FilePath ./publish/SmartFileMerger.exe.sha256 -Encoding ascii
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./publish/SmartFileMerger.exe
+          files: |
+            ./publish/SmartFileMerger.exe
+            ./publish/SmartFileMerger.exe.sha256
           generate_release_notes: true

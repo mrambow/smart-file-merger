@@ -276,4 +276,31 @@ public sealed class WindowsFileSystemServiceIntegrationTests : IDisposable
 
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void CopyFile_WhenDestinationIsReadOnly_OverwritesSuccessfully()
+    {
+        var sourcePath = Path.Combine(_testDirectory, "source.txt");
+        var targetPath = Path.Combine(_testDirectory, "target.txt");
+        File.WriteAllText(sourcePath, "source content");
+        File.WriteAllText(targetPath, "target content");
+        File.SetAttributes(targetPath, FileAttributes.ReadOnly);
+
+        _sut.CopyFile(sourcePath, targetPath, overwrite: true);
+
+        File.ReadAllText(targetPath).Should().Be("source content");
+        (File.GetAttributes(targetPath) & FileAttributes.ReadOnly).Should().Be(0);
+    }
+
+    [Fact]
+    public void StripReadOnlyAttribute_WhenFileIsReadOnly_ClearsReadOnlyFlag()
+    {
+        var filePath = Path.Combine(_testDirectory, "readonly.txt");
+        File.WriteAllText(filePath, "content");
+        File.SetAttributes(filePath, FileAttributes.ReadOnly);
+
+        _sut.StripReadOnlyAttribute(filePath);
+
+        (File.GetAttributes(filePath) & FileAttributes.ReadOnly).Should().Be(0);
+    }
 }

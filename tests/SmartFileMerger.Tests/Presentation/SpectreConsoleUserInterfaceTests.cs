@@ -159,14 +159,14 @@ public class SpectreConsoleUserInterfaceTests
     #region RunWithDownloadProgress Tests
 
     [Fact]
-    public void RunWithDownloadProgress_WhenExecutedWithRatio_CallsWorkAndReportsProgress()
+    public async Task RunWithDownloadProgressAsync_WhenExecutedWithFraction_CallsWorkAndReportsProgress()
     {
         // Arrange
         const string version = "2.2.0";
         var progressValues = new List<double>();
 
         // Act
-        _sut.RunWithDownloadProgress(version, async reportProgress =>
+        await _sut.RunWithDownloadProgressAsync(version, async reportProgress =>
         {
             reportProgress(0.25);
             progressValues.Add(0.25);
@@ -183,26 +183,26 @@ public class SpectreConsoleUserInterfaceTests
     }
 
     [Fact]
-    public void RunWithDownloadProgress_WhenExecutedWithPercentage_CallsWorkAndReportsProgress()
+    public async Task RunWithDownloadProgressAsync_WhenExecutedToCompletion_ReportsFullProgress()
     {
         // Arrange
         const string version = "3.0.0";
         var progressValues = new List<double>();
 
         // Act
-        _sut.RunWithDownloadProgress(version, async reportProgress =>
+        await _sut.RunWithDownloadProgressAsync(version, async reportProgress =>
         {
-            reportProgress(50.0);
-            progressValues.Add(50.0);
+            reportProgress(0.5);
+            progressValues.Add(0.5);
 
-            reportProgress(100.0);
-            progressValues.Add(100.0);
+            reportProgress(1.0);
+            progressValues.Add(1.0);
 
             await Task.CompletedTask;
         });
 
         // Assert
-        progressValues.Should().ContainInOrder(50.0, 100.0);
+        progressValues.Should().ContainInOrder(0.5, 1.0);
         _console.Output.Should().Contain("3.0.0");
     }
 
@@ -210,23 +210,23 @@ public class SpectreConsoleUserInterfaceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void RunWithDownloadProgress_WhenVersionNullOrWhiteSpace_ThrowsArgumentException(string? invalidVersion)
+    public async Task RunWithDownloadProgressAsync_WhenVersionNullOrWhiteSpace_ThrowsArgumentException(string? invalidVersion)
     {
         // Act
-        var act = () => _sut.RunWithDownloadProgress(invalidVersion!, _ => Task.CompletedTask);
+        var act = async () => await _sut.RunWithDownloadProgressAsync(invalidVersion!, _ => Task.CompletedTask);
 
         // Assert
-        act.Should().Throw<ArgumentException>();
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]
-    public void RunWithDownloadProgress_WhenDownloadWorkNull_ThrowsArgumentNullException()
+    public async Task RunWithDownloadProgressAsync_WhenDownloadWorkNull_ThrowsArgumentNullException()
     {
         // Act
-        var act = () => _sut.RunWithDownloadProgress("2.2.0", null!);
+        var act = async () => await _sut.RunWithDownloadProgressAsync("2.2.0", null!);
 
         // Assert
-        act.Should().Throw<ArgumentNullException>();
+        await act.Should().ThrowAsync<ArgumentNullException>();
     }
 
     #endregion

@@ -7,11 +7,14 @@ using System.Text;
 using FluentAssertions;
 using NSubstitute;
 using SmartFileMerger.Domain.Interfaces;
+using SmartFileMerger.Domain.Models;
 using SmartFileMerger.Infrastructure;
 using Xunit;
 
 public sealed class WindowsUpdateDownloadServiceTests : IDisposable
 {
+    private const string ValidGitHubDownloadUrl = "https://github.com/mrambow/smart-file-merger/releases/download/v1.1.0/SmartFileMerger.exe";
+
     private readonly string _testRoot;
     private readonly string _exePath;
     private readonly string _oldPath;
@@ -61,6 +64,20 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
 
         File.Exists(_exePath).Should().BeTrue();
         File.Exists(_oldPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenStaleNewFileExists_DeletesNewFile()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        File.WriteAllText(_newPath, "stale partial download");
+
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        sut.CleanupOldExecutableIfExists();
+
+        File.Exists(_exePath).Should().BeTrue();
+        File.Exists(_newPath).Should().BeFalse();
     }
 
     [Fact]
@@ -142,7 +159,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
             executablePathAccessor: () => _exePath);
 
         var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+            ValidGitHubDownloadUrl,
             progress => progressValues.Add(progress));
 
         success.Should().BeTrue();
@@ -167,7 +184,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
             executablePathAccessor: () => _exePath);
 
         var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+            ValidGitHubDownloadUrl,
             _ => { });
 
         success.Should().BeFalse();
@@ -198,7 +215,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
             executablePathAccessor: () => _exePath);
 
         var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+            ValidGitHubDownloadUrl,
             _ => { },
             cts.Token);
 
@@ -221,7 +238,10 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
         var realFileSystem = new WindowsFileSystemService();
         var fileSystemMock = Substitute.For<IFileSystemService>();
 
-        fileSystemMock.FileExists(Arg.Any<string>()).Returns(call => realFileSystem.FileExists(call.Arg<string>()));
+        fileSystemMock.FileExists(Arg.Any<string>())
+            .Returns(call => realFileSystem.FileExists(call.Arg<string>()));
+        fileSystemMock.GetMetadata(Arg.Any<string>())
+            .Returns(call => realFileSystem.GetMetadata(call.Arg<string>()));
         fileSystemMock.When(x => x.EnsureDirectoryExistsForFile(Arg.Any<string>()))
             .Do(call => realFileSystem.EnsureDirectoryExistsForFile(call.Arg<string>()));
         fileSystemMock.When(x => x.DeleteFile(Arg.Any<string>()))
@@ -248,7 +268,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
             executablePathAccessor: () => _exePath);
 
         var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+            ValidGitHubDownloadUrl,
             _ => { });
 
         success.Should().BeFalse();
@@ -257,31 +277,68 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DownloadAndApplyUpdateAsync_WhenExecutablePathAccessorReturnsNull_ReturnsFalse()
+    public async Task DownloadAndApplyUpdateAsync_WhenUrlIsNotHttps_ThrowsInvalidOperationException()
     {
-        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK));
-        using var sut = new WindowsUpdateDownloadService(
-            httpClient: httpClient,
-            executablePathAccessor: () => null);
+        File.WriteAllText(_exePath, "current binary");
+        using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
 
-        var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+        var act = async () => await sut.DownloadAndApplyUpdateAsync(
+            "http://github.com/mrambow/smart-file-merger/releases/download/v1.0.0/SmartFileMerger.exe",
             _ => { });
 
-        success.Should().BeFalse();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*HTTPS*");
     }
 
     [Fact]
-    public async Task DownloadAndApplyUpdateAsync_WhenOriginalExecutableDoesNotExist_ReturnsFalse()
+    public async Task DownloadAndApplyUpdateAsync_WhenHostIsNotPermitted_ThrowsInvalidOperationException()
     {
-        var nonExistentExe = Path.Combine(_testRoot, "NonExistentExe.exe");
+        File.WriteAllText(_exePath, "current binary");
+        using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        var act = async () => await sut.DownloadAndApplyUpdateAsync(
+            "https://evil.com/downloads/SmartFileMerger.exe",
+            _ => { });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not permitted*");
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenDownloadedFileIsEmpty_ReturnsFalseAndRollsBack()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(Array.Empty<byte>())
+        });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            ValidGitHubDownloadUrl,
+            _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("current binary");
+        File.Exists(_newPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenCurrentExecutableDoesNotExist_ReturnsFalse()
+    {
+        var nonExistentExe = Path.Combine(_testRoot, "NonExistent.exe");
         var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK));
+
         using var sut = new WindowsUpdateDownloadService(
             httpClient: httpClient,
             executablePathAccessor: () => nonExistentExe);
 
         var success = await sut.DownloadAndApplyUpdateAsync(
-            "https://example.com/downloads/SmartFileMerger.exe",
+            ValidGitHubDownloadUrl,
             _ => { });
 
         success.Should().BeFalse();
@@ -304,7 +361,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
         File.WriteAllText(_exePath, "current binary");
         using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
 
-        var act = async () => await sut.DownloadAndApplyUpdateAsync("https://example.com/downloads/SmartFileMerger.exe", null!);
+        var act = async () => await sut.DownloadAndApplyUpdateAsync(ValidGitHubDownloadUrl, null!);
 
         await act.Should().ThrowAsync<ArgumentNullException>();
     }
@@ -327,7 +384,7 @@ public sealed class WindowsUpdateDownloadServiceTests : IDisposable
 
         sut.Dispose();
 
-        var act = async () => await httpClient.GetAsync("https://example.com");
+        var act = async () => await httpClient.GetAsync("https://github.com");
         await act.Should().NotThrowAsync();
     }
 

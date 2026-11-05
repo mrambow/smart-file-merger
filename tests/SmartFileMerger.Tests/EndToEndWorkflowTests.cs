@@ -48,8 +48,6 @@ public sealed class EndToEndWorkflowTests : IDisposable
 
     public void Dispose()
     {
-        Program.ProcessLauncher = null;
-
         if (!Directory.Exists(_tempRoot))
         {
             return;
@@ -85,6 +83,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         provider.GetRequiredService<IUpdateCheckService>().Should().BeOfType<GitHubUpdateCheckService>();
         provider.GetRequiredService<IAppInstallationService>().Should().BeOfType<WindowsAppInstallationService>();
         provider.GetRequiredService<IUpdateDownloadService>().Should().BeOfType<WindowsUpdateDownloadService>();
+        provider.GetRequiredService<IProcessLauncher>().Should().BeOfType<WindowsProcessLauncher>();
         provider.GetRequiredService<ConflictResolutionRunner>().Should().NotBeNull();
         provider.GetRequiredService<MergeOrchestrator>().Should().NotBeNull();
 
@@ -398,11 +397,11 @@ public sealed class EndToEndWorkflowTests : IDisposable
               work((_, _) => { });
           });
 
-        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
-          .Do(callInfo =>
+        ui.When(x => x.RunWithDownloadProgressAsync(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(async callInfo =>
           {
               var work = callInfo.Arg<Func<Action<double>, Task>>();
-              work(_ => { }).GetAwaiter().GetResult();
+              await work(_ => { });
           });
 
         services.AddSingleton(fileSystem);
@@ -652,11 +651,14 @@ public sealed class EndToEndWorkflowTests : IDisposable
 
         var processLaunched = false;
         string? launchedPath = null;
-        Program.ProcessLauncher = path =>
-        {
-            processLaunched = true;
-            launchedPath = path;
-        };
+        var processLauncher = Substitute.For<IProcessLauncher>();
+        processLauncher.Start(Arg.Any<string>(), Arg.Any<IEnumerable<string>?>())
+            .Returns(ci =>
+            {
+                processLaunched = true;
+                launchedPath = ci.Arg<string>();
+                return true;
+            });
 
         updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns((false, string.Empty, string.Empty));
@@ -671,6 +673,7 @@ public sealed class EndToEndWorkflowTests : IDisposable
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(processLauncher);
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -837,11 +840,11 @@ public sealed class EndToEndWorkflowTests : IDisposable
                    .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
 
         ui.PromptForUpdateInstallation("v2.1.0").Returns(true);
-        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
-          .Do(callInfo =>
+        ui.When(x => x.RunWithDownloadProgressAsync(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(async callInfo =>
           {
               var work = callInfo.Arg<Func<Action<double>, Task>>();
-              work(_ => { }).GetAwaiter().GetResult();
+              await work(_ => { });
           });
 
         updateDownloader.DownloadAndApplyUpdateAsync(
@@ -852,17 +855,21 @@ public sealed class EndToEndWorkflowTests : IDisposable
 
         var processLaunched = false;
         string? launchedPath = null;
-        Program.ProcessLauncher = path =>
-        {
-            processLaunched = true;
-            launchedPath = path;
-        };
+        var processLauncher = Substitute.For<IProcessLauncher>();
+        processLauncher.Start(Arg.Any<string>(), Arg.Any<IEnumerable<string>?>())
+            .Returns(ci =>
+            {
+                processLaunched = true;
+                launchedPath = ci.Arg<string>();
+                return true;
+            });
 
         services.AddSingleton(fileSystem);
         services.AddSingleton(ui);
         services.AddSingleton(updateCheck);
         services.AddSingleton(updateDownloader);
         services.AddSingleton(installer);
+        services.AddSingleton(processLauncher);
         services.AddSingleton<ConflictResolutionRunner>();
         services.AddSingleton<MergeOrchestrator>();
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
@@ -901,11 +908,11 @@ public sealed class EndToEndWorkflowTests : IDisposable
                    .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
 
         ui.PromptForUpdateInstallation("v2.1.0").Returns(true);
-        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
-          .Do(callInfo =>
+        ui.When(x => x.RunWithDownloadProgressAsync(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(async callInfo =>
           {
               var work = callInfo.Arg<Func<Action<double>, Task>>();
-              work(_ => { }).GetAwaiter().GetResult();
+              await work(_ => { });
           });
 
         updateDownloader.DownloadAndApplyUpdateAsync(
@@ -984,6 +991,19 @@ public sealed class EndToEndWorkflowTests : IDisposable
         ui.Received(1).ConfirmMerge(source, target, false);
     }
 
+    [Theory]
+    [InlineData("v1.2.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v1.2.0", "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe")]
+    [InlineData("1.2.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v1.2.0", "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe")]
+    [InlineData("v1.2.0", "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe", "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe")]
+    [InlineData("v1.2.0", null, "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe")]
+    [InlineData("1.2.0", null, "https://github.com/mrambow/smart-file-merger/releases/download/v1.2.0/SmartFileMerger.exe")]
+    public void ResolveDownloadUrl_ResolvesCorrectGitHubReleaseDownloadUrl(string version, string? releaseUrl, string expectedUrl)
+    {
+        var result = Program.ResolveDownloadUrl(version, releaseUrl);
+
+        result.Should().Be(expectedUrl);
+    }
+
     #endregion
 
     #region Private Helpers
@@ -1032,11 +1052,11 @@ public sealed class EndToEndWorkflowTests : IDisposable
               work((_, _) => { });
           });
 
-        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
-          .Do(callInfo =>
+        ui.When(x => x.RunWithDownloadProgressAsync(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(async callInfo =>
           {
               var work = callInfo.Arg<Func<Action<double>, Task>>();
-              work(_ => { }).GetAwaiter().GetResult();
+              await work(_ => { });
           });
 
         if (chosenStrategy is not null)

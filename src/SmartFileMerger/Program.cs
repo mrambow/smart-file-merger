@@ -21,10 +21,10 @@ public static class Program
     private const string UserCancelledMessage = "Vorgang durch Benutzer abgebrochen.";
     private const string DefaultVersionFallback = "1.0.0";
     private const string ExeFileName = "SmartFileMerger.exe";
+    private const string GitHubOwner = "mrambow";
+    private const string GitHubRepo = "smart-file-merger";
     private const string UpdateSuccessMessage = "Update erfolgreich installiert! Die Anwendung startet neu.";
     private const string UpdateFailedWarningMessage = "Update konnte nicht angewendet werden. Fahre mit aktueller Version fort.";
-
-    public static Action<string>? ProcessLauncher { get; set; }
 
     public static async Task<int> Main(string[] args) =>
         await RunAsync(args, null);
@@ -63,6 +63,7 @@ public static class Program
         services.AddSingleton<IUpdateCheckService, GitHubUpdateCheckService>();
         services.AddSingleton<IAppInstallationService, WindowsAppInstallationService>();
         services.AddSingleton<IUpdateDownloadService, WindowsUpdateDownloadService>();
+        services.AddSingleton<IProcessLauncher, WindowsProcessLauncher>();
 
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
         services.AddTransient<IConflictResolutionStrategy, MoveOrRenameTargetStrategy>();
@@ -91,7 +92,7 @@ public static class Program
             return SuccessExitCode;
         }
 
-        var updateApplied = await TryApplyUpdateIfAvailableAsync(serviceProvider, ui);
+        var updateApplied = await TryApplyUpdateIfAvailableAsync(serviceProvider, ui, args);
         if (updateApplied)
         {
             return SuccessExitCode;
@@ -126,7 +127,8 @@ public static class Program
         {
             installer.InstallToUserProgramsAndCreateShortcuts();
             ui.ShowInfo($"SmartFileMerger wurde erfolgreich installiert nach: {installer.GetInstalledDirectoryPath()}");
-            LaunchProcess(installer.GetInstalledExecutablePath());
+            var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
+            processLauncher.Start(installer.GetInstalledExecutablePath(), args);
             return true;
         }
         catch (Exception ex)
@@ -138,7 +140,8 @@ public static class Program
 
     private static async Task<bool> TryApplyUpdateIfAvailableAsync(
         IServiceProvider serviceProvider,
-        IUserInterface ui)
+        IUserInterface ui,
+        string[]? args)
     {
         var updateChecker = serviceProvider.GetService<IUpdateCheckService>();
         if (updateChecker is null)
@@ -146,39 +149,49 @@ public static class Program
             return false;
         }
 
+        var installer = serviceProvider.GetService<IAppInstallationService>();
+        if (installer is not null && !installer.IsRunningFromInstalledLocation())
+        {
+            return false;
+        }
+
+        (bool hasUpdate, string latestVersion, string releaseUrl) checkResult;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateTimeoutSeconds));
             var currentVersion = GetCurrentVersion();
-
-            var (hasUpdate, latestVersion, releaseUrl) = await updateChecker.CheckForUpdateAsync(currentVersion, cts.Token);
-            if (!hasUpdate)
-            {
-                return false;
-            }
-
-            ui.ShowUpdateNotice(latestVersion, releaseUrl);
-
-            var updateDownloader = serviceProvider.GetService<IUpdateDownloadService>();
-            if (updateDownloader is null)
-            {
-                return false;
-            }
-
-            return await HandleUpdateInstallationAsync(updateDownloader, ui, latestVersion, releaseUrl);
+            checkResult = await updateChecker.CheckForUpdateAsync(currentVersion, cts.Token);
         }
         catch
         {
             // Update-Prüfung ist Best-Effort und blockiert den Hauptablauf niemals
             return false;
         }
+
+        if (!checkResult.hasUpdate)
+        {
+            return false;
+        }
+
+        ui.ShowUpdateNotice(checkResult.latestVersion, checkResult.releaseUrl);
+
+        var updateDownloader = serviceProvider.GetService<IUpdateDownloadService>();
+        var processLauncher = serviceProvider.GetService<IProcessLauncher>() ?? new WindowsProcessLauncher();
+        if (updateDownloader is null)
+        {
+            return false;
+        }
+
+        return await HandleUpdateInstallationAsync(updateDownloader, processLauncher, ui, checkResult.latestVersion, checkResult.releaseUrl, args);
     }
 
     private static async Task<bool> HandleUpdateInstallationAsync(
         IUpdateDownloadService updateDownloader,
+        IProcessLauncher processLauncher,
         IUserInterface ui,
         string latestVersion,
-        string releaseUrl)
+        string releaseUrl,
+        string[]? args)
     {
         if (!ui.PromptForUpdateInstallation(latestVersion))
         {
@@ -188,10 +201,18 @@ public static class Program
         var downloadUrl = ResolveDownloadUrl(latestVersion, releaseUrl);
         var updateApplied = false;
 
-        ui.RunWithDownloadProgress(latestVersion, async progress =>
+        try
         {
-            updateApplied = await updateDownloader.DownloadAndApplyUpdateAsync(downloadUrl, progress);
-        });
+            await ui.RunWithDownloadProgressAsync(latestVersion, async progress =>
+            {
+                updateApplied = await updateDownloader.DownloadAndApplyUpdateAsync(downloadUrl, progress);
+            });
+        }
+        catch (Exception ex)
+        {
+            ui.ShowWarning($"{UpdateFailedWarningMessage}: {ex.Message}");
+            return false;
+        }
 
         if (!updateApplied)
         {
@@ -200,15 +221,19 @@ public static class Program
         }
 
         ui.ShowInfo(UpdateSuccessMessage);
-        RestartApplication();
+        RestartApplication(processLauncher, args);
         return true;
     }
 
-    private static string ResolveDownloadUrl(string latestVersion, string? releaseUrl)
+    public static string ResolveDownloadUrl(string latestVersion, string? releaseUrl)
     {
+        var normalizedVersion = latestVersion.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+            ? latestVersion
+            : "v" + latestVersion;
+
         if (string.IsNullOrWhiteSpace(releaseUrl))
         {
-            return $"https://github.com/mrambow/smart-file-merger/releases/download/{latestVersion}/{ExeFileName}";
+            return $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases/download/{normalizedVersion}/{ExeFileName}";
         }
 
         if (releaseUrl.EndsWith(ExeFileName, StringComparison.OrdinalIgnoreCase))
@@ -218,18 +243,14 @@ public static class Program
 
         if (releaseUrl.Contains("/releases/tag/", StringComparison.OrdinalIgnoreCase))
         {
-            return releaseUrl.Replace("/releases/tag/", "/releases/download/", StringComparison.OrdinalIgnoreCase).TrimEnd('/') + "/" + ExeFileName;
+            var baseDownload = releaseUrl.Replace("/releases/tag/", "/releases/download/", StringComparison.OrdinalIgnoreCase);
+            return $"{baseDownload.TrimEnd('/')}/{ExeFileName}";
         }
 
-        if (Uri.TryCreate(releaseUrl, UriKind.Absolute, out _))
-        {
-            return $"{releaseUrl.TrimEnd('/')}/{ExeFileName}";
-        }
-
-        return $"https://github.com/mrambow/smart-file-merger/releases/download/{latestVersion}/{ExeFileName}";
+        return $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases/download/{normalizedVersion}/{ExeFileName}";
     }
 
-    private static void RestartApplication()
+    private static void RestartApplication(IProcessLauncher processLauncher, string[]? args)
     {
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(exePath))
@@ -237,56 +258,7 @@ public static class Program
             return;
         }
 
-        LaunchProcess(exePath);
-    }
-
-    private static void LaunchProcess(string exePath)
-    {
-        if (string.IsNullOrWhiteSpace(exePath))
-        {
-            return;
-        }
-
-        if (ProcessLauncher is not null)
-        {
-            ProcessLauncher(exePath);
-            return;
-        }
-
-        TryLaunchProcess(exePath);
-    }
-
-    private static void TryLaunchProcess(string exePath)
-    {
-        try
-        {
-            if (IsRunningInTestHost() || !File.Exists(exePath))
-            {
-                return;
-            }
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = exePath,
-                UseShellExecute = true
-            });
-        }
-        catch
-        {
-            // Best-effort restart
-        }
-    }
-
-    private static bool IsRunningInTestHost()
-    {
-        var processName = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(processName))
-        {
-            return false;
-        }
-
-        return processName.Contains("testhost", StringComparison.OrdinalIgnoreCase) ||
-               processName.Contains("xunit", StringComparison.OrdinalIgnoreCase);
+        processLauncher.Start(exePath, args);
     }
 
     private static async Task<int> ExecuteMergeWorkflowAsync(

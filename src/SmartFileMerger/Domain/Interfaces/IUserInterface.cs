@@ -22,9 +22,10 @@ public interface IUserInterface
     bool PromptForUpdateInstallation(string latestVersion);
 
     /// <summary>
-    /// Führt die übergebene Download-Aktion mit einer Fortschrittsanzeige in Prozent aus.
+    /// Führt die übergebene Download-Aktion mit einer Fortschrittsanzeige aus.
+    /// Der übergebene Progress-Wert ist ein Bruch zwischen 0.0 und 1.0.
     /// </summary>
-    void RunWithDownloadProgress(string version, Func<Action<double>, Task> downloadWork);
+    Task RunWithDownloadProgressAsync(string version, Func<Action<double>, Task> downloadWork);
 
     (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) PromptConfiguration();
 

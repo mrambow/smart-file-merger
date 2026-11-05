@@ -45,7 +45,7 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
     {
         try
         {
-            TryCleanupOldExecutable();
+            TryCleanupStaleUpdateFiles();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -67,6 +67,8 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         {
             return false;
         }
+
+        ValidateDownloadUrl(downloadUrl);
 
         var exePath = ResolveExecutablePath();
         if (string.IsNullOrWhiteSpace(exePath) || !_fileSystemService.FileExists(exePath))
@@ -98,7 +100,30 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         }
     }
 
-    private void TryCleanupOldExecutable()
+    private static void ValidateDownloadUrl(string downloadUrl)
+    {
+        if (!Uri.TryCreate(downloadUrl, UriKind.Absolute, out var uri))
+        {
+            throw new ArgumentException("Invalid download URL format.", nameof(downloadUrl));
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttps)
+        {
+            throw new InvalidOperationException("Update downloads must use HTTPS.");
+        }
+
+        var host = uri.Host;
+        var isAllowedHost = host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);
+
+        if (!isAllowedHost)
+        {
+            throw new InvalidOperationException($"Update download host '{host}' is not permitted.");
+        }
+    }
+
+    private void TryCleanupStaleUpdateFiles()
     {
         var exePath = ResolveExecutablePath();
         if (string.IsNullOrWhiteSpace(exePath))
@@ -106,14 +131,19 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
             return;
         }
 
-        var oldPath = exePath + OldExtension;
-        if (!_fileSystemService.FileExists(oldPath))
+        CleanupFileIfExists(exePath + OldExtension);
+        CleanupFileIfExists(exePath + NewExtension);
+    }
+
+    private void CleanupFileIfExists(string filePath)
+    {
+        if (!_fileSystemService.FileExists(filePath))
         {
             return;
         }
 
-        StripReadOnlyAttribute(oldPath);
-        _fileSystemService.DeleteFile(oldPath);
+        _fileSystemService.StripReadOnlyAttribute(filePath);
+        _fileSystemService.DeleteFile(filePath);
     }
 
     private async Task DownloadToFileAsync(
@@ -137,15 +167,38 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
 
         var totalBytes = response.Content.Headers.ContentLength;
         await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        await using var fileStream = new FileStream(
+        await using (var fileStream = new FileStream(
             destinationFilePath,
             FileMode.Create,
             FileAccess.Write,
             FileShare.None,
             BufferSize,
-            useAsync: true);
+            useAsync: true))
+        {
+            await StreamWithProgressAsync(contentStream, fileStream, totalBytes, progressCallback, cancellationToken);
+        }
 
-        await StreamWithProgressAsync(contentStream, fileStream, totalBytes, progressCallback, cancellationToken);
+        VerifyDownloadedFile(destinationFilePath, totalBytes);
+    }
+
+    private void VerifyDownloadedFile(string destinationFilePath, long? expectedBytes)
+    {
+        if (!_fileSystemService.FileExists(destinationFilePath))
+        {
+            throw new InvalidDataException("Downloaded update file does not exist.");
+        }
+
+        var metadata = _fileSystemService.GetMetadata(destinationFilePath);
+        if (metadata.SizeInBytes <= 0)
+        {
+            throw new InvalidDataException("Downloaded update file is empty.");
+        }
+
+        if (expectedBytes.HasValue && expectedBytes.Value > 0 && metadata.SizeInBytes != expectedBytes.Value)
+        {
+            throw new InvalidDataException(
+                $"Downloaded file size ({metadata.SizeInBytes} bytes) does not match expected Content-Length ({expectedBytes.Value} bytes).");
+        }
     }
 
     private static async Task StreamWithProgressAsync(
@@ -197,7 +250,7 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         {
             if (_fileSystemService.FileExists(path))
             {
-                StripReadOnlyAttribute(path);
+                _fileSystemService.StripReadOnlyAttribute(path);
                 _fileSystemService.DeleteFile(path);
             }
         }
@@ -246,27 +299,6 @@ public sealed class WindowsUpdateDownloadService : IUpdateDownloadService, IDisp
         if (!_httpClient.DefaultRequestHeaders.UserAgent.Any() && !request.Headers.UserAgent.Any())
         {
             request.Headers.UserAgent.ParseAdd(UserAgentHeader);
-        }
-    }
-
-    private static void StripReadOnlyAttribute(string filePath)
-    {
-        try
-        {
-            if (!File.Exists(filePath))
-            {
-                return;
-            }
-
-            var attributes = File.GetAttributes(filePath);
-            if ((attributes & FileAttributes.ReadOnly) != 0)
-            {
-                File.SetAttributes(filePath, attributes & ~FileAttributes.ReadOnly);
-            }
-        }
-        catch
-        {
-            // Best effort attribute clearing
         }
     }
 }
