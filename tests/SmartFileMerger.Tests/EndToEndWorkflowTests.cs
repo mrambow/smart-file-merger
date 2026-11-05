@@ -48,6 +48,8 @@ public sealed class EndToEndWorkflowTests : IDisposable
 
     public void Dispose()
     {
+        Program.ProcessLauncher = null;
+
         if (!Directory.Exists(_tempRoot))
         {
             return;
@@ -81,6 +83,8 @@ public sealed class EndToEndWorkflowTests : IDisposable
         provider.GetRequiredService<IFileSystemService>().Should().BeOfType<WindowsFileSystemService>();
         provider.GetRequiredService<IUserInterface>().Should().BeOfType<SpectreConsoleUserInterface>();
         provider.GetRequiredService<IUpdateCheckService>().Should().BeOfType<GitHubUpdateCheckService>();
+        provider.GetRequiredService<IAppInstallationService>().Should().BeOfType<WindowsAppInstallationService>();
+        provider.GetRequiredService<IUpdateDownloadService>().Should().BeOfType<WindowsUpdateDownloadService>();
         provider.GetRequiredService<ConflictResolutionRunner>().Should().NotBeNull();
         provider.GetRequiredService<MergeOrchestrator>().Should().NotBeNull();
 
@@ -394,6 +398,13 @@ public sealed class EndToEndWorkflowTests : IDisposable
               work((_, _) => { });
           });
 
+        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(callInfo =>
+          {
+              var work = callInfo.Arg<Func<Action<double>, Task>>();
+              work(_ => { }).GetAwaiter().GetResult();
+          });
+
         services.AddSingleton(fileSystem);
         services.AddSingleton(ui);
         services.AddSingleton(updateCheck);
@@ -582,6 +593,336 @@ public sealed class EndToEndWorkflowTests : IDisposable
         ui.Received(1).ConfirmMerge(source, target, false);
     }
 
+    [Fact]
+    public async Task RunAsync_OnStartup_ExecutesCleanupOldExecutableIfExists()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(true);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(provider, ui);
+
+        // Assert
+        exitCode.Should().Be(0);
+        updateDownloader.Received(1).CleanupOldExecutableIfExists();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenNotRunningFromInstalledLocationAndInteractive_PromptsAndInstallsToUserPrograms()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        const string installedPath = @"C:\Users\test\AppData\Local\Programs\SmartFileMerger";
+        installer.IsRunningFromInstalledLocation().Returns(false);
+        installer.GetInstalledDirectoryPath().Returns(installedPath);
+        ui.PromptForInstallation().Returns(true);
+
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(args: null, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptForInstallation();
+        installer.Received(1).InstallToUserProgramsAndCreateShortcuts();
+        ui.Received(1).ShowInfo(Arg.Is<string>(msg => msg.Contains(installedPath)));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenNotRunningFromInstalledLocationAndInstallationDeclined_DoesNotInstall()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(false);
+        ui.PromptForInstallation().Returns(false);
+
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(args: null, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptForInstallation();
+        installer.DidNotReceive().InstallToUserProgramsAndCreateShortcuts();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenNotRunningFromInstalledLocationButHasCliArguments_BypassesInstallationPrompt()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(false);
+
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((false, string.Empty, string.Empty));
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var args = new[] { _sourceDir, _targetDir };
+        var exitCode = await Program.RunAsync(args, provider);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.DidNotReceive().PromptForInstallation();
+        installer.DidNotReceive().InstallToUserProgramsAndCreateShortcuts();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenUpdateAvailableAndConfirmed_DownloadsUpdateShowsInfoAndExitsSuccessfully()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(true);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
+
+        ui.PromptForUpdateInstallation("v2.1.0").Returns(true);
+        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(callInfo =>
+          {
+              var work = callInfo.Arg<Func<Action<double>, Task>>();
+              work(_ => { }).GetAwaiter().GetResult();
+          });
+
+        updateDownloader.DownloadAndApplyUpdateAsync(
+            Arg.Any<string>(),
+            Arg.Any<Action<double>>(),
+            Arg.Any<CancellationToken>())
+          .Returns(true);
+
+        var processLaunched = false;
+        string? launchedPath = null;
+        Program.ProcessLauncher = path =>
+        {
+            processLaunched = true;
+            launchedPath = path;
+        };
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(provider, ui);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).PromptForUpdateInstallation("v2.1.0");
+        await updateDownloader.Received(1).DownloadAndApplyUpdateAsync(
+            Arg.Is<string>(url => url.Contains("v2.1.0") && url.EndsWith("SmartFileMerger.exe")),
+            Arg.Any<Action<double>>(),
+            Arg.Any<CancellationToken>());
+        ui.Received(1).ShowInfo("Update erfolgreich installiert! Die Anwendung startet neu.");
+        processLaunched.Should().BeTrue();
+        launchedPath.Should().NotBeNullOrWhiteSpace();
+        ui.DidNotReceive().ConfirmMerge(Arg.Any<DirectoryRoot>(), Arg.Any<DirectoryRoot>(), Arg.Any<bool>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenUpdateAvailableAndConfirmedButDownloadFails_ShowsWarningAndContinues()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(true);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
+
+        ui.PromptForUpdateInstallation("v2.1.0").Returns(true);
+        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(callInfo =>
+          {
+              var work = callInfo.Arg<Func<Action<double>, Task>>();
+              work(_ => { }).GetAwaiter().GetResult();
+          });
+
+        updateDownloader.DownloadAndApplyUpdateAsync(
+            Arg.Any<string>(),
+            Arg.Any<Action<double>>(),
+            Arg.Any<CancellationToken>())
+          .Returns(false);
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(provider, ui);
+
+        // Assert
+        exitCode.Should().Be(0);
+        ui.Received(1).ShowWarning("Update konnte nicht angewendet werden. Fahre mit aktueller Version fort.");
+        ui.Received(1).ConfirmMerge(source, target, false);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenUpdateAvailableButDeclined_ContinuesWithoutDownloading()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        var ui = Substitute.For<IUserInterface>();
+        var updateCheck = Substitute.For<IUpdateCheckService>();
+        var updateDownloader = Substitute.For<IUpdateDownloadService>();
+        var fileSystem = Substitute.For<IFileSystemService>();
+        var installer = Substitute.For<IAppInstallationService>();
+
+        installer.IsRunningFromInstalledLocation().Returns(true);
+        updateCheck.CheckForUpdateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns((true, "v2.1.0", "https://github.com/mrambow/smart-file-merger/releases/tag/v2.1.0"));
+
+        ui.PromptForUpdateInstallation("v2.1.0").Returns(false);
+
+        var source = new DirectoryRoot(_sourceDir);
+        var target = new DirectoryRoot(_targetDir);
+        ui.PromptConfiguration().Returns((source, target, false));
+        ui.ConfirmMerge(source, target, false).Returns(false);
+
+        services.AddSingleton(fileSystem);
+        services.AddSingleton(ui);
+        services.AddSingleton(updateCheck);
+        services.AddSingleton(updateDownloader);
+        services.AddSingleton(installer);
+        services.AddSingleton<ConflictResolutionRunner>();
+        services.AddSingleton<MergeOrchestrator>();
+        services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
+
+        using var provider = services.BuildServiceProvider();
+
+        // Act
+        var exitCode = await Program.RunAsync(provider, ui);
+
+        // Assert
+        exitCode.Should().Be(0);
+        await updateDownloader.DidNotReceive().DownloadAndApplyUpdateAsync(
+            Arg.Any<string>(),
+            Arg.Any<Action<double>>(),
+            Arg.Any<CancellationToken>());
+        ui.Received(1).ConfirmMerge(source, target, false);
+    }
+
     #endregion
 
     #region Private Helpers
@@ -628,6 +969,13 @@ public sealed class EndToEndWorkflowTests : IDisposable
           {
               var work = callInfo.Arg<Action<Action<string, int>>>();
               work((_, _) => { });
+          });
+
+        ui.When(x => x.RunWithDownloadProgress(Arg.Any<string>(), Arg.Any<Func<Action<double>, Task>>()))
+          .Do(callInfo =>
+          {
+              var work = callInfo.Arg<Func<Action<double>, Task>>();
+              work(_ => { }).GetAwaiter().GetResult();
           });
 
         if (chosenStrategy is not null)

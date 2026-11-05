@@ -1,5 +1,6 @@
 namespace SmartFileMerger;
 
+using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using SmartFileMerger.Application;
@@ -19,6 +20,11 @@ public static class Program
     private const int UpdateTimeoutSeconds = 2;
     private const string UserCancelledMessage = "Vorgang durch Benutzer abgebrochen.";
     private const string DefaultVersionFallback = "1.0.0";
+    private const string ExeFileName = "SmartFileMerger.exe";
+    private const string UpdateSuccessMessage = "Update erfolgreich installiert! Die Anwendung startet neu.";
+    private const string UpdateFailedWarningMessage = "Update konnte nicht angewendet werden. Fahre mit aktueller Version fort.";
+
+    public static Action<string>? ProcessLauncher { get; set; }
 
     public static async Task<int> Main(string[] args) =>
         await RunAsync(args, null);
@@ -55,6 +61,8 @@ public static class Program
         services.AddSingleton<IFileSystemService, WindowsFileSystemService>();
         services.AddSingleton<IUserInterface, SpectreConsoleUserInterface>();
         services.AddSingleton<IUpdateCheckService, GitHubUpdateCheckService>();
+        services.AddSingleton<IAppInstallationService, WindowsAppInstallationService>();
+        services.AddSingleton<IUpdateDownloadService, WindowsUpdateDownloadService>();
 
         services.AddTransient<IConflictResolutionStrategy, OverwriteTargetStrategy>();
         services.AddTransient<IConflictResolutionStrategy, MoveOrRenameTargetStrategy>();
@@ -75,13 +83,204 @@ public static class Program
         ArgumentNullException.ThrowIfNull(serviceProvider);
         ArgumentNullException.ThrowIfNull(ui);
 
-        var updateCheckService = serviceProvider.GetRequiredService<IUpdateCheckService>();
-        var orchestrator = serviceProvider.GetRequiredService<MergeOrchestrator>();
-
+        CleanupOldExecutable(serviceProvider);
         ui.ShowHeader();
-        await CheckForUpdatesAsync(updateCheckService, ui);
 
+        PerformInitialSetupIfRequested(serviceProvider, ui, args);
+
+        var updateApplied = await TryApplyUpdateIfAvailableAsync(serviceProvider, ui);
+        if (updateApplied)
+        {
+            return SuccessExitCode;
+        }
+
+        return await ExecuteMergeWorkflowAsync(serviceProvider, ui, args);
+    }
+
+    private static void CleanupOldExecutable(IServiceProvider serviceProvider)
+    {
+        var updateDownloader = serviceProvider.GetService<IUpdateDownloadService>();
+        updateDownloader?.CleanupOldExecutableIfExists();
+    }
+
+    private static void PerformInitialSetupIfRequested(
+        IServiceProvider serviceProvider,
+        IUserInterface ui,
+        string[]? args)
+    {
+        var installer = serviceProvider.GetService<IAppInstallationService>();
+        if (installer is null || installer.IsRunningFromInstalledLocation() || HasDirectCliArguments(args))
+        {
+            return;
+        }
+
+        if (!ui.PromptForInstallation())
+        {
+            return;
+        }
+
+        try
+        {
+            installer.InstallToUserProgramsAndCreateShortcuts();
+            ui.ShowInfo($"SmartFileMerger wurde erfolgreich installiert nach: {installer.GetInstalledDirectoryPath()}");
+        }
+        catch (Exception ex)
+        {
+            ui.ShowWarning($"Installation konnte nicht abgeschlossen werden: {ex.Message}");
+        }
+    }
+
+    private static async Task<bool> TryApplyUpdateIfAvailableAsync(
+        IServiceProvider serviceProvider,
+        IUserInterface ui)
+    {
+        var updateChecker = serviceProvider.GetService<IUpdateCheckService>();
+        if (updateChecker is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateTimeoutSeconds));
+            var currentVersion = GetCurrentVersion();
+
+            var (hasUpdate, latestVersion, releaseUrl) = await updateChecker.CheckForUpdateAsync(currentVersion, cts.Token);
+            if (!hasUpdate)
+            {
+                return false;
+            }
+
+            ui.ShowUpdateNotice(latestVersion, releaseUrl);
+
+            var updateDownloader = serviceProvider.GetService<IUpdateDownloadService>();
+            if (updateDownloader is null)
+            {
+                return false;
+            }
+
+            return await HandleUpdateInstallationAsync(updateDownloader, ui, latestVersion, releaseUrl);
+        }
+        catch
+        {
+            // Update-Prüfung ist Best-Effort und blockiert den Hauptablauf niemals
+            return false;
+        }
+    }
+
+    private static async Task<bool> HandleUpdateInstallationAsync(
+        IUpdateDownloadService updateDownloader,
+        IUserInterface ui,
+        string latestVersion,
+        string releaseUrl)
+    {
+        if (!ui.PromptForUpdateInstallation(latestVersion))
+        {
+            return false;
+        }
+
+        var downloadUrl = ResolveDownloadUrl(latestVersion, releaseUrl);
+        var updateApplied = false;
+
+        ui.RunWithDownloadProgress(latestVersion, async progress =>
+        {
+            updateApplied = await updateDownloader.DownloadAndApplyUpdateAsync(downloadUrl, progress);
+        });
+
+        if (!updateApplied)
+        {
+            ui.ShowWarning(UpdateFailedWarningMessage);
+            return false;
+        }
+
+        ui.ShowInfo(UpdateSuccessMessage);
+        RestartApplication();
+        return true;
+    }
+
+    private static string ResolveDownloadUrl(string latestVersion, string? releaseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(releaseUrl))
+        {
+            return $"https://github.com/mrambow/smart-file-merger/releases/download/{latestVersion}/{ExeFileName}";
+        }
+
+        if (releaseUrl.EndsWith(ExeFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return releaseUrl;
+        }
+
+        if (releaseUrl.Contains("/releases/tag/", StringComparison.OrdinalIgnoreCase))
+        {
+            return releaseUrl.Replace("/releases/tag/", "/releases/download/", StringComparison.OrdinalIgnoreCase).TrimEnd('/') + "/" + ExeFileName;
+        }
+
+        if (Uri.TryCreate(releaseUrl, UriKind.Absolute, out _))
+        {
+            return $"{releaseUrl.TrimEnd('/')}/{ExeFileName}";
+        }
+
+        return $"https://github.com/mrambow/smart-file-merger/releases/download/{latestVersion}/{ExeFileName}";
+    }
+
+    private static void RestartApplication()
+    {
+        var exePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exePath))
+        {
+            return;
+        }
+
+        if (ProcessLauncher is not null)
+        {
+            ProcessLauncher(exePath);
+            return;
+        }
+
+        TryLaunchProcess(exePath);
+    }
+
+    private static void TryLaunchProcess(string exePath)
+    {
+        try
+        {
+            if (IsRunningInTestHost() || !File.Exists(exePath))
+            {
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // Best-effort restart
+        }
+    }
+
+    private static bool IsRunningInTestHost()
+    {
+        var processName = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        return processName.Contains("testhost", StringComparison.OrdinalIgnoreCase) ||
+               processName.Contains("xunit", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<int> ExecuteMergeWorkflowAsync(
+        IServiceProvider serviceProvider,
+        IUserInterface ui,
+        string[]? args)
+    {
+        var orchestrator = serviceProvider.GetRequiredService<MergeOrchestrator>();
         var (source, target, isDryRun) = ResolveConfiguration(args, ui);
+
         if (!ui.ConfirmMerge(source, target, isDryRun))
         {
             ui.ShowInfo(UserCancelledMessage);
@@ -105,6 +304,9 @@ public static class Program
 
         return ui.PromptConfiguration();
     }
+
+    private static bool HasDirectCliArguments(string[]? args) =>
+        TryParseCommandLineArguments(args, out _);
 
     private static bool TryParseCommandLineArguments(
         string[]? args,
@@ -152,27 +354,6 @@ public static class Program
         {
             config = default;
             return false;
-        }
-    }
-
-    private static async Task CheckForUpdatesAsync(IUpdateCheckService updateCheckService, IUserInterface ui)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(UpdateTimeoutSeconds));
-            var currentVersion = GetCurrentVersion();
-
-            var (hasUpdate, latestVersion, releaseUrl) = await updateCheckService.CheckForUpdateAsync(currentVersion, cts.Token);
-            if (!hasUpdate)
-            {
-                return;
-            }
-
-            ui.ShowUpdateNotice(latestVersion, releaseUrl);
-        }
-        catch
-        {
-            // Update-Prüfung ist Best-Effort und blockiert den Hauptablauf niemals
         }
     }
 
