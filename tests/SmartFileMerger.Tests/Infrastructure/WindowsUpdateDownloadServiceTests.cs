@@ -1,0 +1,355 @@
+namespace SmartFileMerger.Tests.Infrastructure;
+
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using FluentAssertions;
+using NSubstitute;
+using SmartFileMerger.Domain.Interfaces;
+using SmartFileMerger.Infrastructure;
+using Xunit;
+
+public sealed class WindowsUpdateDownloadServiceTests : IDisposable
+{
+    private readonly string _testRoot;
+    private readonly string _exePath;
+    private readonly string _oldPath;
+    private readonly string _newPath;
+
+    public WindowsUpdateDownloadServiceTests()
+    {
+        _testRoot = Path.Combine(Path.GetTempPath(), "SmartFileMergerUpdateTests_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testRoot);
+
+        _exePath = Path.Combine(_testRoot, "SmartFileMerger.exe");
+        _oldPath = Path.Combine(_testRoot, "SmartFileMerger.exe.old");
+        _newPath = Path.Combine(_testRoot, "SmartFileMerger.exe.new");
+    }
+
+    public void Dispose()
+    {
+        if (!Directory.Exists(_testRoot))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(_testRoot, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
+            Directory.Delete(_testRoot, recursive: true);
+        }
+        catch
+        {
+            // Best effort cleanup
+        }
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenOldExecutableExists_DeletesOldFile()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        File.WriteAllText(_oldPath, "stale binary");
+
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        sut.CleanupOldExecutableIfExists();
+
+        File.Exists(_exePath).Should().BeTrue();
+        File.Exists(_oldPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenOldExecutableIsReadOnly_DeletesOldFileSuccessfully()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        File.WriteAllText(_oldPath, "stale binary");
+        File.SetAttributes(_oldPath, FileAttributes.ReadOnly);
+
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        sut.CleanupOldExecutableIfExists();
+
+        File.Exists(_oldPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenOldExecutableIsLocked_DoesNotThrowAndHandlesLockSilently()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        File.WriteAllText(_oldPath, "locked binary");
+
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        using (new FileStream(_oldPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var act = () => sut.CleanupOldExecutableIfExists();
+            act.Should().NotThrow();
+            File.Exists(_oldPath).Should().BeTrue();
+        }
+
+        sut.CleanupOldExecutableIfExists();
+        File.Exists(_oldPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenOldExecutableDoesNotExist_DoesNotThrow()
+    {
+        File.WriteAllText(_exePath, "current binary");
+
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        var act = () => sut.CleanupOldExecutableIfExists();
+
+        act.Should().NotThrow();
+        File.Exists(_exePath).Should().BeTrue();
+    }
+
+    [Fact]
+    public void CleanupOldExecutableIfExists_WhenExecutablePathIsNull_DoesNotThrow()
+    {
+        var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => null);
+
+        var act = () => sut.CleanupOldExecutableIfExists();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenDownloadSucceeds_UpdatesExecutableAndBacksUpToOldAndReportsProgress()
+    {
+        File.WriteAllText(_exePath, "v1.0.0 binary content");
+
+        const string newPayload = "v1.1.0 new binary payload content";
+        var payloadBytes = Encoding.UTF8.GetBytes(newPayload);
+
+        var httpClient = CreateHttpClientWithResponder(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payloadBytes)
+            };
+            return response;
+        });
+
+        var progressValues = new List<double>();
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            progress => progressValues.Add(progress));
+
+        success.Should().BeTrue();
+        File.ReadAllText(_exePath).Should().Be(newPayload);
+        File.Exists(_oldPath).Should().BeTrue();
+        File.ReadAllText(_oldPath).Should().Be("v1.0.0 binary content");
+        File.Exists(_newPath).Should().BeFalse();
+
+        progressValues.Should().NotBeEmpty();
+        progressValues.Last().Should().Be(1.0);
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenServerReturnsHttpError_LeavesOriginalIntactAndCleansUpNewFile()
+    {
+        File.WriteAllText(_exePath, "v1.0.0 untouched content");
+
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("v1.0.0 untouched content");
+        File.Exists(_oldPath).Should().BeFalse();
+        File.Exists(_newPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenDownloadCanceled_LeavesOriginalIntactAndCleansUpNewFile()
+    {
+        File.WriteAllText(_exePath, "v1.0.0 untouched content");
+
+        var httpClient = CreateHttpClientWithResponder(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("partial payload"))
+            };
+            return response;
+        });
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            _ => { },
+            cts.Token);
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("v1.0.0 untouched content");
+        File.Exists(_newPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenSwapToNewFileFails_RollsBackOldFileToOriginalExecutable()
+    {
+        File.WriteAllText(_exePath, "original stable binary");
+
+        var payloadBytes = Encoding.UTF8.GetBytes("new binary payload");
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(payloadBytes)
+        });
+
+        var realFileSystem = new WindowsFileSystemService();
+        var fileSystemMock = Substitute.For<IFileSystemService>();
+
+        fileSystemMock.FileExists(Arg.Any<string>()).Returns(call => realFileSystem.FileExists(call.Arg<string>()));
+        fileSystemMock.When(x => x.EnsureDirectoryExistsForFile(Arg.Any<string>()))
+            .Do(call => realFileSystem.EnsureDirectoryExistsForFile(call.Arg<string>()));
+        fileSystemMock.When(x => x.DeleteFile(Arg.Any<string>()))
+            .Do(call => realFileSystem.DeleteFile(call.Arg<string>()));
+
+        fileSystemMock.When(x => x.MoveFile(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>()))
+            .Do(call =>
+            {
+                var src = call.ArgAt<string>(0);
+                var dst = call.ArgAt<string>(1);
+                var overwrite = call.ArgAt<bool>(2);
+
+                if (src == _newPath && dst == _exePath)
+                {
+                    throw new IOException("Simulated file lock during new executable rename");
+                }
+
+                realFileSystem.MoveFile(src, dst, overwrite);
+            });
+
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            fileSystemService: fileSystemMock,
+            executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            _ => { });
+
+        success.Should().BeFalse();
+        File.ReadAllText(_exePath).Should().Be("original stable binary");
+        File.Exists(_newPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenExecutablePathAccessorReturnsNull_ReturnsFalse()
+    {
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => null);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            _ => { });
+
+        success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenOriginalExecutableDoesNotExist_ReturnsFalse()
+    {
+        var nonExistentExe = Path.Combine(_testRoot, "NonExistentExe.exe");
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var sut = new WindowsUpdateDownloadService(
+            httpClient: httpClient,
+            executablePathAccessor: () => nonExistentExe);
+
+        var success = await sut.DownloadAndApplyUpdateAsync(
+            "https://example.com/downloads/SmartFileMerger.exe",
+            _ => { });
+
+        success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenDownloadUrlIsWhitespace_ReturnsFalse()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        var success = await sut.DownloadAndApplyUpdateAsync("   ", _ => { });
+
+        success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DownloadAndApplyUpdateAsync_WhenProgressCallbackIsNull_ThrowsArgumentNullException()
+    {
+        File.WriteAllText(_exePath, "current binary");
+        using var sut = new WindowsUpdateDownloadService(executablePathAccessor: () => _exePath);
+
+        var act = async () => await sut.DownloadAndApplyUpdateAsync("https://example.com/downloads/SmartFileMerger.exe", null!);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void Dispose_WhenOwnsHttpClient_DisposesSuccessfully()
+    {
+        var sut = new WindowsUpdateDownloadService();
+
+        var act = () => sut.Dispose();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task Dispose_WhenExternalHttpClientProvided_DoesNotDisposeExternalClient()
+    {
+        var httpClient = CreateHttpClientWithResponder(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var sut = new WindowsUpdateDownloadService(httpClient: httpClient);
+
+        sut.Dispose();
+
+        var act = async () => await httpClient.GetAsync("https://example.com");
+        await act.Should().NotThrowAsync();
+    }
+
+    private static HttpClient CreateHttpClientWithResponder(Func<HttpRequestMessage, HttpResponseMessage> responder)
+    {
+        var handler = new TestMockHttpMessageHandler(responder);
+        return new HttpClient(handler);
+    }
+
+    private sealed class TestMockHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+
+        public TestMockHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+        {
+            _responder = responder;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_responder(request));
+        }
+    }
+}
