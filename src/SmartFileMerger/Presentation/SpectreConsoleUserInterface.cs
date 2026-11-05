@@ -52,6 +52,55 @@ public sealed class SpectreConsoleUserInterface : IUserInterface
         _console.Write(panel);
     }
 
+    public bool PromptForInstallation()
+    {
+        return _console.Confirm(
+            "Möchtest du SmartFileMerger installieren (Desktop- und Startmenü-Verknüpfung anlegen)?",
+            defaultValue: true);
+    }
+
+    public bool PromptForUpdateInstallation(string latestVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(latestVersion);
+
+        return _console.Confirm(
+            $"Ein neues Update ({Markup.Escape(latestVersion)}) ist verfügbar! Jetzt automatisch herunterladen und installieren?",
+            defaultValue: true);
+    }
+
+    public async Task RunWithDownloadProgressAsync(string version, Func<Action<double>, Task> downloadWork)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        ArgumentNullException.ThrowIfNull(downloadWork);
+
+        await _console.Progress()
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new SpinnerColumn())
+            .StartAsync(async ctx => await ExecuteDownloadProgressAsync(ctx, version, downloadWork));
+    }
+
+    private static async Task ExecuteDownloadProgressAsync(
+        ProgressContext ctx,
+        string version,
+        Func<Action<double>, Task> downloadWork)
+    {
+        var description = $"[green]Lade Update ({Markup.Escape(version)}) herunter[/]";
+        var progressTask = ctx.AddTask(description, maxValue: 100);
+
+        await downloadWork(progress => UpdateDownloadProgress(progressTask, progress));
+
+        progressTask.Value = 100;
+    }
+
+    private static void UpdateDownloadProgress(ProgressTask progressTask, double progress)
+    {
+        var percentage = Math.Clamp(progress * 100.0, 0.0, 100.0);
+        progressTask.Value = percentage;
+    }
+
     public (DirectoryRoot Source, DirectoryRoot Target, bool IsDryRun) PromptConfiguration()
     {
         var source = PromptSourceDirectory();

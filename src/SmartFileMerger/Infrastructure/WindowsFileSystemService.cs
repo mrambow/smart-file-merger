@@ -96,6 +96,33 @@ public sealed class WindowsFileSystemService : IFileSystemService
         RestoreTimestamps(targetFullPath, creationTime, lastWriteTime);
     }
 
+    public void CopyFile(string sourceFullPath, string targetFullPath, bool overwrite = false)
+    {
+        ArgumentNullException.ThrowIfNull(sourceFullPath);
+        ArgumentNullException.ThrowIfNull(targetFullPath);
+
+        EnsureDirectoryExistsForFile(targetFullPath);
+
+        if (overwrite && File.Exists(targetFullPath))
+        {
+            StripRestrictingAttributes(targetFullPath);
+        }
+
+        File.Copy(sourceFullPath, targetFullPath, overwrite);
+    }
+
+    public void StripReadOnlyAttribute(string filePath)
+    {
+        ArgumentNullException.ThrowIfNull(filePath);
+
+        if (!File.Exists(filePath))
+        {
+            return;
+        }
+
+        StripRestrictingAttributes(filePath);
+    }
+
     public void DeleteFile(string fullPath)
     {
         ArgumentNullException.ThrowIfNull(fullPath);

@@ -21,6 +21,10 @@ public interface IFileSystemService
 
     void MoveFile(string sourceFullPath, string targetFullPath, bool overwrite = false);
 
+    void CopyFile(string sourceFullPath, string targetFullPath, bool overwrite = false);
+
+    void StripReadOnlyAttribute(string filePath);
+
     void DeleteFile(string fullPath);
 
     void RemoveEmptyDirectories(DirectoryRoot root);

@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run tests
+        run: dotnet test --configuration Release
+
+      - name: Publish self-contained executable
+        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./publish
+
+      - name: Generate SHA256 checksum
+        run: |
+          $hash = (Get-FileHash ./publish/SmartFileMerger.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  SmartFileMerger.exe" | Out-File -FilePath ./publish/SmartFileMerger.exe.sha256 -Encoding ascii
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ./publish/SmartFileMerger.exe
+            ./publish/SmartFileMerger.exe.sha256
+          generate_release_notes: true
