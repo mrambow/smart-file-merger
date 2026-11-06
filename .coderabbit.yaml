@@ -9,10 +9,15 @@ reviews:
   poem: false
   collapse_walkthrough: false
   auto_review:
-    enabled: false
+    enabled: true
     drafts: false
     labels:
       - "review"
+  path_filters:
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!*.lock"
+    - "!*.min.*"
   path_instructions:
     - path: "src/**"
       instructions: |
@@ -25,12 +30,6 @@ reviews:
         - Test-Standards: xUnit, FluentAssertions und NSubstitute.
         - Naming-Convention: MethodOrUnit_Condition_ExpectedResult.
         - Keine Hollow Stubs: Tests müssen echte Geschäftslogik und Edge Cases prüfen.
-
-path_filters:
-  - "!**/bin/**"
-  - "!**/obj/**"
-  - "!*.lock"
-  - "!*.min.*"
 
 chat:
   auto_reply: true
