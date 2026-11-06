@@ -33,3 +33,7 @@ jobs:
 
       - name: Run unit & integration tests
         run: dotnet test SmartFileMerger.sln --no-build --configuration Release --verbosity normal
+
+      - name: Run release script tests
+        shell: pwsh
+        run: pwsh -File ./tests/scripts/resolve-release-version.Tests.ps1
