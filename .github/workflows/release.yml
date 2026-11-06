@@ -2,9 +2,20 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for manual release (e.g. v1.0.0)'
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -16,28 +27,113 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version & Create Tag
+        id: version
+        shell: pwsh
+        run: |
+          git fetch --tags --force
+
+          $targetTag = ""
+          $rawVersion = ""
+
+          if ('${{ github.ref_type }}' -eq 'tag') {
+              $targetTag = '${{ github.ref_name }}'
+              $rawVersion = $targetTag.TrimStart('v')
+          } elseif ('${{ inputs.tag_name }}' -ne '') {
+              $targetTag = '${{ inputs.tag_name }}'.Trim()
+              if (-not $targetTag.StartsWith('v')) {
+                  $targetTag = "v$targetTag"
+              }
+              $rawVersion = $targetTag.TrimStart('v')
+          } else {
+              $commitMsg = $(git log -1 --pretty=%B)
+              if ($commitMsg -match '(?i)\[(skip release|no release)\]') {
+                  Write-Output "Release skipped via commit message directive."
+                  "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+                  exit 0
+              }
+
+              $allTags = $(git tag -l "v*" --sort=-v:refname)
+              $latestTag = $allTags | Select-Object -First 1
+
+              if (-not $latestTag) {
+                  $targetTag = "v1.0.0"
+                  $rawVersion = "1.0.0"
+              } else {
+                  if ($latestTag -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+                      $major = [int]$matches[1]
+                      $minor = [int]$matches[2]
+                      $patch = [int]$matches[3]
+
+                      if ($commitMsg -match '(?i)(breaking change|#major)') {
+                          $major++
+                          $minor = 0
+                          $patch = 0
+                      } elseif ($commitMsg -match '(?i)(feat(\(.*\))?:|#minor)') {
+                          $minor++
+                          $patch = 0
+                      } else {
+                          $patch++
+                      }
+
+                      $targetTag = "v$major.$minor.$patch"
+                      $rawVersion = "$major.$minor.$patch"
+                  } else {
+                      $targetTag = "v1.0.0"
+                      $rawVersion = "1.0.0"
+                  }
+              }
+          }
+
+          Write-Output "Resolved release tag: $targetTag (version: $rawVersion)"
+
+          $existingTag = $(git tag -l $targetTag)
+          if (-not $existingTag) {
+              Write-Output "Creating and pushing git tag $targetTag..."
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag -a $targetTag -m "Release $targetTag"
+              git push origin $targetTag
+          } else {
+              Write-Output "Tag $targetTag already exists."
+          }
+
+          "tag=$targetTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "version=$rawVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Setup .NET SDK
+        if: steps.version.outputs.skip != 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
       - name: Run tests
+        if: steps.version.outputs.skip != 'true'
         run: dotnet test --configuration Release
 
       - name: Publish self-contained executable
-        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./publish
+        if: steps.version.outputs.skip != 'true'
+        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.version }} -o ./publish
 
       - name: Generate SHA256 checksum
+        if: steps.version.outputs.skip != 'true'
+        shell: pwsh
         run: |
           $hash = (Get-FileHash ./publish/SmartFileMerger.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  SmartFileMerger.exe" | Out-File -FilePath ./publish/SmartFileMerger.exe.sha256 -Encoding ascii
 
       - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
           files: |
             ./publish/SmartFileMerger.exe
             ./publish/SmartFileMerger.exe.sha256
