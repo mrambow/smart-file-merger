@@ -8,17 +8,35 @@ reviews:
   high_level_summary: true
   poem: false
   collapse_walkthrough: false
+
+  # 1. Nur reviewen, nichts automatisch committen oder generieren
+  committable_suggestions: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  # 2. Schutz vor PR-Spam + Inkrementelles Weiterprüfen nach Freigabe
   auto_review:
     enabled: false
-    auto_incremental_review: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 5
     drafts: false
     labels:
       - "review"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+
+  # 3. Build-Artefakte ausschließen
   path_filters:
     - "!**/bin/**"
     - "!**/obj/**"
     - "!*.lock"
     - "!*.min.*"
+
+  # 4. Architektur- und Coding-Vorgaben (AGENTS.md)
   path_instructions:
     - path: "src/**"
       instructions: |
