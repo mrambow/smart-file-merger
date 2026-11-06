@@ -21,6 +21,9 @@ function Main {
     }
 
     git fetch --tags --force
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to fetch release tags (git exit code $LASTEXITCODE)."
+    }
     $latestTag = GetLatestSemanticTag
     $resolvedTag = CalculateNextVersion $latestTag $CommitMessage
     $resolvedVersion = $resolvedTag.TrimStart('v')
@@ -45,6 +48,9 @@ function NormalizeTag([string]$raw) {
 
 function GetLatestSemanticTag {
     $tags = git tag -l "v*" --sort=-v:refname
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to list release tags (git exit code $LASTEXITCODE)."
+    }
     foreach ($t in $tags) {
         if ($t -match '^v\d+\.\d+\.\d+$') {
             return $t

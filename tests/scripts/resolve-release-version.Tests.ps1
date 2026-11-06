@@ -57,4 +57,29 @@ try {
 } finally {
     Remove-Item $outputPath -ErrorAction SilentlyContinue
 }
+# A failed native command can still emit plausible tags. Never consume them.
+$script:CommitMessage = 'fix: repair'
+$script:ExplicitTagName = ''
+try {
+    function git {
+        if ($args[0] -eq 'fetch') {
+            $global:LASTEXITCODE = 23
+            return
+        }
+        throw 'Tag listing must not run after a failed fetch.'
+    }
+    $failure = ''
+    try { Main } catch { $failure = $_.Exception.Message }
+    AssertEqual $failure 'Failed to fetch release tags (git exit code 23).'
+
+    function git {
+        $global:LASTEXITCODE = 24
+        'v9.9.9'
+    }
+    $failure = ''
+    try { GetLatestSemanticTag } catch { $failure = $_.Exception.Message }
+    AssertEqual $failure 'Failed to list release tags (git exit code 24).'
+} finally {
+    Remove-Item Function:git
+}
 Write-Output 'Release version regression checks passed.'
