@@ -38,7 +38,7 @@ function IsReleaseSkipped([string]$msg) {
 function NormalizeTag([string]$raw) {
     $trimmed = $raw.Trim()
     if ($trimmed.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
-        return $trimmed
+        return 'v' + $trimmed.Substring(1)
     }
     return "v$trimmed"
 }
@@ -66,11 +66,11 @@ function CalculateNextVersion([string]$latestTag, [string]$commitMsg) {
     $minor = [int]$matches[2]
     $patch = [int]$matches[3]
 
-    if ($commitMsg -match '(?i)(breaking:|breaking change|#major)') {
+    if ($commitMsg -match '(?im)^(?:breaking(?: change)?:|[a-z][a-z0-9-]*(?:\([^\r\n()]+\))?!:)|#major') {
         $major++
         $minor = 0
         $patch = 0
-    } elseif ($commitMsg -match '(?i)(feat(\(.*\))?:|#minor)') {
+    } elseif ($commitMsg -match '(?im)^feat(?:\([^\r\n()]+\))?:|#minor') {
         $minor++
         $patch = 0
     } else {
@@ -81,6 +81,12 @@ function CalculateNextVersion([string]$latestTag, [string]$commitMsg) {
 }
 
 function WriteOutputValues([string]$tag, [string]$version, [string]$skip) {
+    # Validate before writing outputs consumed by the release and build steps.
+    $semanticVersionPattern = '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z'
+    if ($tag -cnotmatch $semanticVersionPattern -or $version -cne $tag.Substring(1)) {
+        throw "Invalid release tag: expected vMajor.Minor.Patch with optional prerelease and build metadata."
+    }
+
     Write-Output "Resolved release tag: $tag (version: $version)"
     WriteOutput "tag" $tag
     WriteOutput "version" $version

@@ -54,7 +54,10 @@ jobs:
 
       - name: Publish self-contained executable
         if: steps.version.outputs.skip != 'true'
-        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.version }} -o ./publish
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version="$env:RELEASE_VERSION" -o ./publish
 
       - name: Generate SHA256 checksum
         if: steps.version.outputs.skip != 'true'
