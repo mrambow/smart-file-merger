@@ -13,7 +13,7 @@ on:
 
 concurrency:
   group: release
-  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
@@ -36,7 +36,31 @@ jobs:
         env:
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
         run: |
-          $commitMsg = $(git log -1 --pretty=%B)
+          git fetch --tags --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $latestTag = $(git tag -l "v*" --sort=-v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
+
+          if ($latestTag) {
+              $tagCommit = $(git rev-parse --verify "refs/tags/$latestTag^{commit}" 2>$null)
+              $headCommit = $(git rev-parse --verify HEAD)
+              if ($tagCommit -and $tagCommit -eq $headCommit) {
+                  Write-Output "HEAD is already released under tag $latestTag. Skipping release."
+                  "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+                  exit 0
+              }
+          }
+
+          $headMsg = $(git log -1 --pretty=%B)
+          if ($headMsg -match '(?i)\[(skip release|no release)\]') {
+              $commitMsg = "[skip release]"
+          } elseif ($latestTag) {
+              $commitMsg = $(git log "$latestTag..HEAD" --pretty=format:"%B")
+          } else {
+              $commitMsg = $(git log HEAD --pretty=format:"%B")
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           pwsh -File ./scripts/resolve-release-version.ps1 `
             -ExplicitTagName "$env:INPUT_TAG_NAME" `
             -CommitMessage "$commitMsg" `
@@ -57,7 +81,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version="$env:RELEASE_VERSION" -o ./publish
+        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=$env:RELEASE_VERSION -o ./publish
 
       - name: Generate SHA256 checksum
         if: steps.version.outputs.skip != 'true'
@@ -74,21 +98,29 @@ jobs:
         run: |
           $existingTag = $(git tag -l $env:TAG)
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           if ($existingTag) {
-              $tagCommit = git rev-parse --verify "refs/tags/$env:TAG^{commit}"
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              $headCommit = git rev-parse --verify HEAD
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              if (-not $tagCommit -or -not $headCommit -or $tagCommit -ne $headCommit) {
-                  throw "Existing tag '$env:TAG' does not resolve to the built commit (HEAD)."
+              $tagCommit = $(git rev-parse --verify "refs/tags/$env:TAG^{commit}" 2>$null)
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) { exit 1 }
+
+              $headCommit = $(git rev-parse --verify HEAD)
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headCommit)) { exit 1 }
+
+              if ($tagCommit.Trim() -ne $headCommit.Trim()) {
+                  Write-Error "Tag $env:TAG already exists pointing to $tagCommit, differing from HEAD $headCommit"
+                  exit 1
               }
-          }
-          if (-not $existingTag) {
+
+              Write-Output "Tag $env:TAG already exists and points to current HEAD ($headCommit). Skipping tag creation."
+          } else {
               git config user.name "github-actions[bot]"
               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
               git tag -a $env:TAG -m "Release $env:TAG"
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
               git push origin $env:TAG
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
       - name: Create GitHub Release

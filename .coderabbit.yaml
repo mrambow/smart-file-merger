@@ -9,7 +9,8 @@ reviews:
   poem: false
   collapse_walkthrough: false
   auto_review:
-    enabled: true
+    enabled: false
+    auto_incremental_review: false
     drafts: false
     labels:
       - "review"
