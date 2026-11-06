@@ -107,12 +107,13 @@ dotnet test
 
 ---
 
-## Governance & Contributing
+## Governance, Quality Gates & Releases
 
-- Code style and formatting are enforced via [.editorconfig](.editorconfig).
-- Contributor guidelines and AI agent rules are specified in [AGENTS.md](AGENTS.md).
-- Automated CI pipeline runs on push and PRs via GitHub Actions.
-- Maker-checker security gate uses `claude-pr-gate` triggered on `review` label.
+- **Code Formatting & Standards**: Enforced via [.editorconfig](.editorconfig) and compiler analyzers.
+- **Contributor & Agent Guidelines**: Detailed architectural rules (DDD, Ponytail Principle, Windows Filesystem robustness) are specified in [AGENTS.md](AGENTS.md).
+- **Automated CI**: GitHub Actions validates builds and runs the test suite across all pull requests and pushes to `main`.
+- **Code Review Gatekeeper (CodeRabbit)**: AI-driven code reviews via CodeRabbit ([.coderabbit.yaml](.coderabbit.yaml)), strictly gated by maintainer trigger (opt-in `review` label) to prevent unauthorized token usage.
+- **Automated Release Pipeline**: Merging any PR into `main` automatically triggers the release workflow ([.github/workflows/release.yml](.github/workflows/release.yml)), which creates the semantic version tag (starting with `v1.0.0`), compiles the standalone Windows x64 single-file executable (`SmartFileMerger.exe`), computes its SHA256 checksum (`SmartFileMerger.exe.sha256`), and publishes the GitHub Release.
 
 ---
 

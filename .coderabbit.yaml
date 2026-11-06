@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "de-DE"
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: false
+  auto_review:
+    enabled: false
+    auto_incremental_review: false
+    drafts: false
+    labels:
+      - "review"
+  path_filters:
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!*.lock"
+    - "!*.min.*"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        - Clean Architecture & Layering: Domain- und Application-Layer dürfen niemals direkt I/O betreiben (kein System.IO, File, Directory, Path, FileInfo, kein System.Console). Sämtliche Dateisystem-Operationen müssen über IFileSystemService laufen, sämtliche UI-Ausgaben über IUserInterface.
+        - Ponytail-Prinzip: Öffentliche Methoden lesen sich wie ein Inhaltsverzeichnis (Table of Contents), maximale Einrücktiefe ist 2, Guard-Clauses und Early Returns am Methodenbeginn, keine Magic Values.
+        - Domain-Driven Design: Vermeide Primitive Obsession. Keine Roh-Strings für Pfade (nutze DirectoryRoot und RelativeFilePath). Unveränderliche Records für Domain-Modelle.
+        - Windows-Dateisystem-Robustheit: ReadOnly-Attribute müssen vor dem Überschreiben entfernt werden. Cross-Volume Timestamp Retention (CreationTimeUtc & LastWriteTimeUtc) bei plattenübergreifenden Moves. Sharing Violations (IOException durch Dateisperren) müssen gefangen und geloggt werden, ohne den gesamten Merge abzubrechen.
+    - path: "tests/**"
+      instructions: |
+        - Test-Standards: xUnit, FluentAssertions und NSubstitute.
+        - Naming-Convention: MethodOrUnit_Condition_ExpectedResult.
+        - Keine Hollow Stubs: Tests müssen echte Geschäftslogik und Edge Cases prüfen.
+
+chat:
+  auto_reply: true

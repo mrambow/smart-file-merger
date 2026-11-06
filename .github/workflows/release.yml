@@ -2,9 +2,18 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for manual release (e.g. v1.0.0)'
+        required: false
+        type: string
+
+concurrency:
+  group: release
+  queue: max
 
 permissions:
   contents: write
@@ -16,28 +25,115 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags --force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $latestTag = $(git tag -l "v*" --sort=-v:refname | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1)
+
+          if ($latestTag) {
+              $tagCommit = $(git rev-parse --verify "refs/tags/$latestTag^{commit}" 2>$null)
+              $headCommit = $(git rev-parse --verify HEAD)
+              if ($tagCommit -and $tagCommit -eq $headCommit -and [string]::IsNullOrWhiteSpace($env:INPUT_TAG_NAME)) {
+                  gh release view $latestTag *> $null
+                  if ($LASTEXITCODE -eq 0) {
+                      Write-Output "HEAD is already released under tag $latestTag. Skipping release."
+                      "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+                      exit 0
+                  }
+                  $env:INPUT_TAG_NAME = $latestTag
+              }
+          }
+
+          $headMsg = $(git log -1 --pretty=%B)
+          if ($headMsg -match '(?i)\[(skip release|no release)\]') {
+              $commitMsg = "[skip release]"
+          } elseif ($latestTag) {
+              $commitMsg = (git log "$latestTag..HEAD" --pretty=format:"%B") -join "`n"
+          } else {
+              $commitMsg = (git log HEAD --pretty=format:"%B") -join "`n"
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          pwsh -File ./scripts/resolve-release-version.ps1 `
+            -ExplicitTagName "$env:INPUT_TAG_NAME" `
+            -CommitMessage "$commitMsg" `
+            -OutputFile "$env:GITHUB_OUTPUT"
 
       - name: Setup .NET SDK
+        if: steps.version.outputs.skip != 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
       - name: Run tests
+        if: steps.version.outputs.skip != 'true'
         run: dotnet test --configuration Release
 
       - name: Publish self-contained executable
-        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o ./publish
+        if: steps.version.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet publish src/SmartFileMerger/SmartFileMerger.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=$env:RELEASE_VERSION -o ./publish
 
       - name: Generate SHA256 checksum
+        if: steps.version.outputs.skip != 'true'
+        shell: pwsh
         run: |
           $hash = (Get-FileHash ./publish/SmartFileMerger.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  SmartFileMerger.exe" | Out-File -FilePath ./publish/SmartFileMerger.exe.sha256 -Encoding ascii
 
+      - name: Create Git Tag
+        if: steps.version.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $existingTag = $(git tag -l $env:TAG)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if ($existingTag) {
+              $tagCommit = $(git rev-parse --verify "refs/tags/$env:TAG^{commit}" 2>$null)
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($tagCommit)) { exit 1 }
+
+              $headCommit = $(git rev-parse --verify HEAD)
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($headCommit)) { exit 1 }
+
+              if ($tagCommit.Trim() -ne $headCommit.Trim()) {
+                  Write-Error "Tag $env:TAG already exists pointing to $tagCommit, differing from HEAD $headCommit"
+                  exit 1
+              }
+
+              Write-Output "Tag $env:TAG already exists and points to current HEAD ($headCommit). Skipping tag creation."
+          } else {
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+              git tag -a $env:TAG -m "Release $env:TAG"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+              git push origin $env:TAG
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Create GitHub Release
+        if: steps.version.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
           files: |
             ./publish/SmartFileMerger.exe
             ./publish/SmartFileMerger.exe.sha256

@@ -97,3 +97,23 @@ When implementing or extending filesystem logic:
 - **No Hollow Stubs**:
   - Never generate dummy or unasserted tests. Every test must verify genuine business requirements and edge cases.
   - All tests must pass cleanly (`dotnet test`) with 0 warnings before opening a PR or claiming task completion.
+
+---
+
+## 6. Code Review & Quality Gates (CodeRabbit)
+
+- **AI Code Review via CodeRabbit**:
+  - Pull requests are reviewed using CodeRabbit configured in `.coderabbit.yaml`.
+  - **Maintainer Gate & Misuse Prevention**: To prevent unauthorized token/credit consumption and unintended execution on untrusted PRs, automatic reviews are disabled (`auto_review.enabled: false`). CodeRabbit is strictly opt-in and triggers only when the maintainer adds the `review` label to the pull request or runs a manual trigger command.
+  - Reviews enforce clean architecture, the Ponytail principle, Windows filesystem robustness rules, and test verification standards.
+
+---
+
+## 7. Automated Release Workflow & Versioning
+
+- **Fully Automated Releases on Merge**:
+  - When a pull request is merged into `main`, GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) automatically triggers the release pipeline.
+  - **Semantic Tagging**: The workflow determines the release tag (`v1.0.0` initially, followed by automated patch/minor/major increments based on conventional commit messages like `feat:` / `breaking:` or manual dispatch).
+  - **Binary & Checksum Generation**: Compiles the standalone self-contained `SmartFileMerger.exe` for `win-x64` with single-file compression and native libraries included, embeds the assembly version, and calculates the SHA256 checksum (`SmartFileMerger.exe.sha256`).
+  - **GitHub Release Publication**: Automatically publishes the release to GitHub Releases with generated release notes and attached binary assets.
+  - **Bypassing & Manual Overrides**: Adding `[skip release]` or `[no release]` to a commit message skips release generation. Manual releases can also be triggered via `workflow_dispatch` in GitHub Actions or by pushing a `v*` tag directly.
