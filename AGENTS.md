@@ -104,7 +104,7 @@ When implementing or extending filesystem logic:
 
 - **AI Code Review via CodeRabbit**:
   - Pull requests are reviewed using CodeRabbit configured in `.coderabbit.yaml`.
-  - **Maintainer Gate & Misuse Prevention**: To prevent unauthorized token/credit consumption and unintended execution on untrusted PRs, automatic reviews are disabled (`auto_review.enabled: false`). CodeRabbit is strictly opt-in and triggers only when the maintainer adds the `review` label to the pull request or runs a manual trigger command.
+  - **Maintainer Gate & Misuse Prevention**: To prevent unauthorized token/credit consumption and unintended execution on untrusted PRs, automatic reviews on new PRs are disabled (`auto_review.enabled: false`). CodeRabbit is strictly opt-in and triggers only when the maintainer adds the `review` label to the pull request or runs a manual trigger command. Once the label is active, incremental reviews automatically check subsequent commits up to a safeguard limit of 5 commits (`auto_pause_after_reviewed_commits: 5`).
   - Reviews enforce clean architecture, the Ponytail principle, Windows filesystem robustness rules, and test verification standards.
 
 ---
